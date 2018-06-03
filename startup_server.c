@@ -17,6 +17,8 @@
 
 #include <chronos_packets.h>
 #include <chronos_transactions.h>
+#include <chronos_environment.h>
+#include <benchmark.h>
 
 #include "server_config.h"
 #include "chronos_server.h"
@@ -54,8 +56,8 @@ static const char *program_name = "startup_server";
     } \
   } while(0)
 
-int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
-int server_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
+int server_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
 
 const char *chronosServerThreadNames[] ={
   "CHRONOS_SERVER_THREAD_LISTENER",
@@ -87,6 +89,9 @@ dispatchTableFn (chronosRequestPacket_t *reqPacketP, int *txn_rc, chronosServerT
 
 static int
 waitPeriod(double updatePeriodMS);
+
+static int 
+runTxnEvaluation(chronosServerContext_t *serverContextP);
 
 #ifdef CHRONOS_USER_TRANSACTIONS_ENABLED
 static int
@@ -199,6 +204,15 @@ int main(int argc, char *argv[])
   if (processArguments(argc, argv, serverContextP) != CHRONOS_SERVER_SUCCESS) {
     server_error("Failed to process arguments");
     goto failXit;
+  }
+
+  if (serverContextP->runningMode == 4) {
+    server_info("Running in transaction evaluation mode");
+    if (runTxnEvaluation(serverContextP) != CHRONOS_SERVER_SUCCESS) {
+      server_error("Failed to run transaction evaluation mode");
+      goto failXit;    
+    }
+     goto cleanup;
   }
 
   /* set the signal handler for sigint */
@@ -1292,7 +1306,7 @@ processUserTransaction(int *txn_rc,
 
     case CHRONOS_USER_TXN_PURCHASE:
       rc = benchmark_data_packet_alloc(num_data_items, data_packetH);
-      if (rc != BENCHMARK_SUCCESS) {
+      if (rc != CHRONOS_SERVER_SUCCESS) {
         server_error("Could not allocate data packet");
         goto failXit;
       }
@@ -1304,7 +1318,7 @@ processUserTransaction(int *txn_rc,
                                           reqPacketP->request_data.purchaseInfo[i].price,
                                           reqPacketP->request_data.purchaseInfo[i].amount,
                                           data_packetH);
-        if (rc != BENCHMARK_SUCCESS) {
+        if (rc != CHRONOS_SERVER_SUCCESS) {
           server_error("Could not append data to packet");
           goto failXit;
         }
@@ -1315,7 +1329,7 @@ processUserTransaction(int *txn_rc,
                                    infoP->contextP->benchmarkCtxtP);
 
       rc = benchmark_data_packet_free(data_packetH);
-      if (rc != BENCHMARK_SUCCESS) {
+      if (rc != CHRONOS_SERVER_SUCCESS) {
         server_error("Could not free data packet");
         goto failXit;
       }
@@ -1325,7 +1339,7 @@ processUserTransaction(int *txn_rc,
 
     case CHRONOS_USER_TXN_SALE:
       rc = benchmark_data_packet_alloc(num_data_items, data_packetH);
-      if (rc != BENCHMARK_SUCCESS) {
+      if (rc != CHRONOS_SERVER_SUCCESS) {
         server_error("Could not allocate data packet");
         goto failXit;
       }
@@ -1337,7 +1351,7 @@ processUserTransaction(int *txn_rc,
                                           reqPacketP->request_data.purchaseInfo[i].price,
                                           reqPacketP->request_data.purchaseInfo[i].amount,
                                           data_packetH);
-        if (rc != BENCHMARK_SUCCESS) {
+        if (rc != CHRONOS_SERVER_SUCCESS) {
           server_error("Could not append data to packet");
           goto failXit;
         }
@@ -1348,7 +1362,7 @@ processUserTransaction(int *txn_rc,
                                infoP->contextP->benchmarkCtxtP);
 
       rc = benchmark_data_packet_free(data_packetH);
-      if (rc != BENCHMARK_SUCCESS) {
+      if (rc != CHRONOS_SERVER_SUCCESS) {
         server_error("Could not free data packet");
         goto failXit;
       }
@@ -1407,7 +1421,7 @@ failXit:
 
   if (data_packetH != NULL) {
     rc = benchmark_data_packet_free(data_packetH);
-    if (rc != BENCHMARK_SUCCESS) {
+    if (rc != CHRONOS_SERVER_SUCCESS) {
       server_error("Could not free data packet");
       goto failXit;
     }
@@ -1727,6 +1741,179 @@ cleanup:
 }
 #endif
 
+static int 
+runTxnEvaluation(chronosServerContext_t *serverContextP)
+{
+  int rc = CHRONOS_SERVER_SUCCESS;
+  int i, j;
+  int txn_type;
+  int txn_rc = 0;
+  int num_data_items;
+  const char        *pkey_list[CHRONOS_MAX_DATA_ITEMS_PER_XACT];
+  CHRONOS_ENV_H   chronosEnvH;
+  CHRONOS_CACHE_H chronosCacheH = NULL;
+  CHRONOS_CLIENT_CACHE_H  clientCacheH = NULL;
+  CHRONOS_REQUEST_H requestH = NULL;
+  BENCHMARK_DATA_PACKET_H data_packetH = NULL;
+  chronosRequestPacket_t *reqPacketP = NULL;
+
+  chronosEnvH = chronosEnvAlloc(CHRONOS_SERVER_HOME_DIR, CHRONOS_SERVER_DATAFILES_DIR);
+  if (chronosEnvH == NULL) {
+    server_error("Failed to allocate chronos environment handle");
+    goto failXit;
+  }
+
+  chronosCacheH = chronosEnvCacheGet(chronosEnvH);
+  if (chronosCacheH == NULL) {
+    server_error("Invalid cache handle");
+    goto failXit;
+  }
+
+  clientCacheH = chronosClientCacheAlloc(1, 1, chronosCacheH);
+  if (clientCacheH == NULL) {
+    server_error("Invalid client cache handle");
+    goto failXit;
+  }
+
+ if (serverContextP->initialLoad) {
+    /* Create the system tables */
+    if (benchmark_initial_load(program_name, CHRONOS_SERVER_HOME_DIR, CHRONOS_SERVER_DATAFILES_DIR) != CHRONOS_SERVER_SUCCESS) {
+      server_error("Failed to perform initial load");
+      goto failXit;
+    }
+  }
+  else {
+    server_info("*** Skipping initial load");
+  }
+  
+  /* Obtain a benchmark handle */
+  if (benchmark_handle_alloc(&serverContextP->benchmarkCtxtP, 
+                             0, 
+                             program_name,
+                             CHRONOS_SERVER_HOME_DIR, 
+                             CHRONOS_SERVER_DATAFILES_DIR) != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to allocate handle");
+    goto failXit;
+  }
+  
+  for (txn_type = 0; txn_type < CHRONOS_USER_TXN_MAX; txn_type++) {
+    for (j = 0; j < 1000; ++ j) {
+
+      server_info("(%d) Evaluating: %s", 
+                  txn_type * 1000 + j, chronos_user_transaction_str[txn_type]);
+
+      requestH = chronosRequestCreate(txn_type, clientCacheH, chronosEnvH);
+      if (requestH == NULL) {
+        server_error("Failed to populate request");
+        goto cleanup;
+      }
+
+      reqPacketP = (chronosRequestPacket_t *) requestH;
+      num_data_items = reqPacketP->numItems;
+
+      switch(txn_type) {
+
+      case CHRONOS_USER_TXN_VIEW_STOCK:
+        memset(pkey_list, 0, sizeof(pkey_list));
+        for (i=0; i<num_data_items; i++) {
+          pkey_list[i] = reqPacketP->request_data.symbolInfo[i].symbol;
+        }
+        txn_rc = benchmark_view_stock2(num_data_items, pkey_list, serverContextP->benchmarkCtxtP);
+        break;
+
+      case CHRONOS_USER_TXN_VIEW_PORTFOLIO:
+        memset(pkey_list, 0, sizeof(pkey_list));
+        for (i=0; i<num_data_items; i++) {
+          pkey_list[i] = reqPacketP->request_data.portfolioInfo[i].accountId;
+        }
+        txn_rc = benchmark_view_portfolio2(num_data_items, pkey_list, serverContextP->benchmarkCtxtP);
+        break;
+
+      case CHRONOS_USER_TXN_PURCHASE:
+        rc = benchmark_data_packet_alloc(num_data_items, &data_packetH);
+        if (rc != CHRONOS_SERVER_SUCCESS) {
+          server_error("Could not allocate data packet");
+          goto failXit;
+        }
+
+        for (i=0; i<num_data_items; i++) {
+          rc = benchmark_data_packet_append(reqPacketP->request_data.purchaseInfo[i].accountId,
+                                            reqPacketP->request_data.purchaseInfo[i].symbolId,
+                                            reqPacketP->request_data.purchaseInfo[i].symbol,
+                                            reqPacketP->request_data.purchaseInfo[i].price,
+                                            reqPacketP->request_data.purchaseInfo[i].amount,
+                                            data_packetH);
+          if (rc != CHRONOS_SERVER_SUCCESS) {
+            server_error("Could not append data to packet");
+            goto failXit;
+          }
+        }
+      
+        txn_rc = benchmark_purchase2(data_packetH,
+                                     serverContextP->benchmarkCtxtP);
+
+        rc = benchmark_data_packet_free(data_packetH);
+        if (rc != CHRONOS_SERVER_SUCCESS) {
+          server_error("Could not free data packet");
+          goto failXit;
+        }
+        data_packetH = NULL;
+        break;
+
+      case CHRONOS_USER_TXN_SALE:
+        rc = benchmark_data_packet_alloc(num_data_items, &data_packetH);
+        if (rc != CHRONOS_SERVER_SUCCESS) {
+          server_error("Could not allocate data packet");
+          goto failXit;
+        }
+
+        for (i=0; i<num_data_items; i++) {
+          rc = benchmark_data_packet_append(reqPacketP->request_data.purchaseInfo[i].accountId,
+                                            reqPacketP->request_data.purchaseInfo[i].symbolId,
+                                            reqPacketP->request_data.purchaseInfo[i].symbol,
+                                            reqPacketP->request_data.purchaseInfo[i].price,
+                                            reqPacketP->request_data.purchaseInfo[i].amount,
+                                            data_packetH);
+          if (rc != CHRONOS_SERVER_SUCCESS) {
+            server_error("Could not append data to packet");
+            goto failXit;
+          }
+        }
+      
+        txn_rc = benchmark_sell2(data_packetH,
+                                 serverContextP->benchmarkCtxtP);
+
+        rc = benchmark_data_packet_free(data_packetH);
+        if (rc != CHRONOS_SERVER_SUCCESS) {
+          server_error("Could not free data packet");
+          goto failXit;
+        }
+        data_packetH = NULL;
+        break;
+
+      default:
+        assert(0);
+      }
+
+      rc = chronosRequestFree(requestH);
+      if (rc != CHRONOS_SERVER_SUCCESS) {
+        server_error("Failed to release request");
+        goto cleanup;
+      }
+
+    }
+  }
+    
+    
+  goto cleanup; 
+
+failXit:
+  rc = CHRONOS_SERVER_FAIL;
+
+cleanup:
+  return rc;
+}
+
 #if 0
 static int
 startExperimentTimer(chronosServerContext_t *serverContextP)
@@ -1792,7 +1979,7 @@ chronos_usage()
     "Starts up a chronos server \n"
     "\n"
     "OPTIONS:\n"
-    "-m [mode]             running mode: 0: BASE, 1: Admission Control, 2: Adaptive Update, 3: Admission Control + Adaptive Update\n"
+    "-m [mode]             running mode: 0: BASE, 1: Admission Control, 2: Adaptive Update, 3: Admission Control + Adaptive Update 4: Transaction Evaluation\n"
     "-c [num]              number of clients it can accept (default: %d)\n"
     "-v [num]              validity interval [in milliseconds] (default: %d ms)\n"
     "-s [num]              sampling period [in seconds] (default: %d seconds)\n"
