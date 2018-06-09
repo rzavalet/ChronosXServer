@@ -88,6 +88,9 @@ dispatchTableFn (chronosRequestPacket_t *reqPacketP, int *txn_rc, chronosServerT
 static int
 waitPeriod(double updatePeriodMS);
 
+static int 
+runTxnEvaluation(chronosServerContext_t *serverContextP);
+
 #ifdef CHRONOS_USER_TRANSACTIONS_ENABLED
 static int
 processUserTransaction(int *txn_rc,
@@ -199,6 +202,15 @@ int main(int argc, char *argv[])
   if (processArguments(argc, argv, serverContextP) != CHRONOS_SERVER_SUCCESS) {
     server_error("Failed to process arguments");
     goto failXit;
+  }
+
+  if (serverContextP->runningMode == 4) {
+    server_info("Running in transaction evaluation mode");
+    if (runTxnEvaluation(serverContextP) != CHRONOS_SERVER_SUCCESS) {
+      server_error("Failed to run transaction evaluation mode");
+      goto failXit;    
+    }
+     goto cleanup;
   }
 
   /* set the signal handler for sigint */
@@ -1727,6 +1739,19 @@ cleanup:
 }
 #endif
 
+static int 
+runTxnEvaluation(chronosServerContext_t *serverContextP)
+{
+  int rc = CHRONOS_SERVER_SUCCESS;
+  goto cleanup; 
+
+failXit:
+  rc = CHRONOS_SERVER_FAIL;
+
+cleanup:
+  return rc;
+}
+
 #if 0
 static int
 startExperimentTimer(chronosServerContext_t *serverContextP)
@@ -1792,7 +1817,7 @@ chronos_usage()
     "Starts up a chronos server \n"
     "\n"
     "OPTIONS:\n"
-    "-m [mode]             running mode: 0: BASE, 1: Admission Control, 2: Adaptive Update, 3: Admission Control + Adaptive Update\n"
+    "-m [mode]             running mode: 0: BASE, 1: Admission Control, 2: Adaptive Update, 3: Admission Control + Adaptive Update 4: Transaction Evaluation\n"
     "-c [num]              number of clients it can accept (default: %d)\n"
     "-v [num]              validity interval [in milliseconds] (default: %d ms)\n"
     "-s [num]              sampling period [in seconds] (default: %d seconds)\n"
