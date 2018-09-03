@@ -26,6 +26,69 @@
 #define CHRONOS_TCP_QUEUE   1024
 static const char *program_name = "startup_server";
 
+/* Track response times */
+#define getTime(x) gettimeofday( (x), NULL)
+#define milliSleep(t,x) \
+        ((x).tv_sec=0, (x).tv_usec=(t)*1000, select(0,NULL,NULL,NULL,&(x)))
+struct timeval rqtp = {0, 100000}; /* 100 ms */
+#include <sched.h>
+#define tt_yield() sched_yield()
+
+/* Response time -- this can use a lot of memory */
+#define RTINCR 10              /* micro second increment */
+#define RTBINS 100000/RTINCR /* 100 ms */
+static int *rtus = NULL;
+static long int rtusum = 0;
+
+struct timeval xact_start;
+struct timeval xact_end;
+long int sample_response;
+
+#define RTCAPTURE_START() \
+do { \
+ getTime(&xact_start);\
+} while (0)
+
+#define RTCAPTURE() \
+do { \
+ getTime(&xact_end);\
+ sample_response = udiff_time(&xact_start,&xact_end);\
+ if (sample_response<RTBINS){\
+    rtus[(int)(sample_response)/RTINCR]++;\
+ }else{ \
+    rtus[RTBINS]++;\
+ }\
+ rtusum += sample_response;\
+ getTime(&xact_start);\
+} while (0);
+ 
+#define RTCAPTURE_PRINT() \
+do {\
+  int _ijk; \
+  fprintf(stderr, "us,count\n"); \
+  for (_ijk=0; _ijk < RTBINS + 1; _ijk++) { \
+    fprintf(stderr, "%d,%d\n", _ijk, rtus[_ijk]); \
+  } \
+} while(0)
+
+long int diff_time(struct timeval * start,struct timeval *end)
+{
+  return ( (end->tv_sec*1000 + end->tv_usec/1000) -
+           (start->tv_sec*1000 + start->tv_usec/1000) );
+}
+
+long int udiff_time(struct timeval * start,struct timeval *end)
+{
+  return ( (  end->tv_sec*1000000 + end->tv_usec) -
+           (start->tv_sec*1000000 + start->tv_usec) );
+}
+ 
+struct timeval load_start,load_end;  /* variables of population time */
+struct timeval tindex_start,tindex_end; /* variables of index creation time*/
+struct timeval uindex_start,uindex_end; /* variables of index creation time */
+   
+
+
 #define CHRONOS_SERVER_SUCCESS  (0)
 #define CHRONOS_SERVER_FAIL     (1)
 
@@ -184,6 +247,8 @@ int main(int argc, char *argv[])
   int    num_pkeys = 0;
   chronos_time_t  system_start;
   unsigned long long initial_update_time_ms;
+
+  rtus = calloc(RTBINS + 1, sizeof(int));
 
   serverContextP = malloc(sizeof(chronosServerContext_t));
   if (serverContextP == NULL) {
@@ -1796,8 +1861,15 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
     goto failXit;
   }
   
-  for (txn_type = 0; txn_type < CHRONOS_USER_TXN_MAX; txn_type++) {
+  RTCAPTURE_START();
+
+  //for (txn_type = 0; txn_type < CHRONOS_USER_TXN_MAX; txn_type++) {
+  //for (txn_type = 0; txn_type < 1; txn_type++) {
+  int reps = 0;
+  txn_type = 0;
+  for (reps = 0; reps < 1000; reps ++) {
     for (j = 0; j < 1000; ++ j) {
+
 
       server_info("(%d) Evaluating: %s", 
                   txn_type * 1000 + j, chronos_user_transaction_str[txn_type]);
@@ -1901,10 +1973,12 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
         goto cleanup;
       }
 
+      RTCAPTURE();
     }
   }
     
-    
+
+  RTCAPTURE_PRINT(); 
   goto cleanup; 
 
 failXit:
