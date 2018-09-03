@@ -1977,7 +1977,6 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
     }
   }
     
-
   RTCAPTURE_PRINT(); 
   goto cleanup; 
 
