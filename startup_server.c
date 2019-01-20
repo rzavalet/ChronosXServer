@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <getopt.h>
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -21,103 +22,22 @@
 #include <benchmark.h>
 
 #include "server_config.h"
+#include "common.h"
 #include "chronos_server.h"
+#include "stats.h"
 
-#define CHRONOS_TCP_QUEUE   1024
+#define xstr(s) str(s)
+#define str(s) #s
+
+/* These are the different running modes */
+#define CHRONOS_SERVER_XACT_EVALUATION_MODE     (4)
+#define CHRONOS_SERVER_XACT_NAME_VIEW_STOCK     "view_stock"
+#define CHRONOS_SERVER_XACT_NAME_VIEW_PORTFOLIO "view_portfolio"
+#define CHRONOS_SERVER_XACT_NAME_PURCHASE       "purchase_stock"
+#define CHRONOS_SERVER_XACT_NAME_SELL           "sell_stock"
+#define CHRONOS_SERVER_XACT_NAME_REFRESH_STOCK  "refresh_stock"
+
 static const char *program_name = "startup_server";
-
-/* Track response times */
-#define getTime(x) gettimeofday( (x), NULL)
-#define milliSleep(t,x) \
-        ((x).tv_sec=0, (x).tv_usec=(t)*1000, select(0,NULL,NULL,NULL,&(x)))
-struct timeval rqtp = {0, 100000}; /* 100 ms */
-#include <sched.h>
-#define tt_yield() sched_yield()
-
-/* Response time -- this can use a lot of memory */
-#define RTINCR 10              /* micro second increment */
-#define RTBINS 100000/RTINCR /* 100 ms */
-static int *rtus = NULL;
-static long int rtusum = 0;
-
-struct timeval xact_start;
-struct timeval xact_end;
-long int sample_response;
-
-#define RTCAPTURE_START() \
-do { \
- getTime(&xact_start);\
-} while (0)
-
-#define RTCAPTURE() \
-do { \
- getTime(&xact_end);\
- sample_response = udiff_time(&xact_start,&xact_end);\
- if (sample_response<RTBINS){\
-    rtus[(int)(sample_response)/RTINCR]++;\
- }else{ \
-    rtus[RTBINS]++;\
- }\
- rtusum += sample_response;\
- getTime(&xact_start);\
-} while (0);
- 
-#define RTCAPTURE_PRINT() \
-do {\
-  int _ijk; \
-  fprintf(stderr, "us,count\n"); \
-  for (_ijk=0; _ijk < RTBINS + 1; _ijk++) { \
-    fprintf(stderr, "%d,%d\n", _ijk, rtus[_ijk]); \
-  } \
-} while(0)
-
-long int diff_time(struct timeval * start,struct timeval *end)
-{
-  return ( (end->tv_sec*1000 + end->tv_usec/1000) -
-           (start->tv_sec*1000 + start->tv_usec/1000) );
-}
-
-long int udiff_time(struct timeval * start,struct timeval *end)
-{
-  return ( (  end->tv_sec*1000000 + end->tv_usec) -
-           (start->tv_sec*1000000 + start->tv_usec) );
-}
- 
-struct timeval load_start,load_end;  /* variables of population time */
-struct timeval tindex_start,tindex_end; /* variables of index creation time*/
-struct timeval uindex_start,uindex_end; /* variables of index creation time */
-   
-
-
-#define CHRONOS_SERVER_SUCCESS  (0)
-#define CHRONOS_SERVER_FAIL     (1)
-
-#define server_msg(_prefix, ...) \
-  do {                     \
-    char _local_buf_[256];             \
-    snprintf(_local_buf_, sizeof(_local_buf_), __VA_ARGS__); \
-    fprintf(stderr,"%s: %s: at %s:%d", _prefix,_local_buf_, __FILE__, __LINE__);   \
-    fprintf(stderr,"\n");              \
-  } while(0)
-
-#define server_info(...) \
-  server_msg("INFO", __VA_ARGS__)
-
-#define server_error(...) \
-  server_msg("ERROR", __VA_ARGS__)
-
-#define server_warning(...) \
-  server_msg("WARN", __VA_ARGS__)
-
-#define server_debug(level,...) \
-  do {                                                         \
-    if (server_debug_level >= level) {                        \
-      char _local_buf_[256];                                   \
-      snprintf(_local_buf_, sizeof(_local_buf_), __VA_ARGS__); \
-      fprintf(stderr, "DEBUG %s:%d: %s", __FILE__, __LINE__, _local_buf_);    \
-      fprintf(stderr, "\n");     \
-    } \
-  } while(0)
 
 int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
 int server_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
@@ -237,7 +157,7 @@ void handler_sampling(void *arg);
  */ 
 int main(int argc, char *argv[]) 
 {
-  int rc;
+  int rc = CHRONOS_SERVER_SUCCESS;
   int i;
   int thread_num = 0;
   pthread_attr_t attr;
@@ -248,7 +168,7 @@ int main(int argc, char *argv[])
   chronos_time_t  system_start;
   unsigned long long initial_update_time_ms;
 
-  rtus = calloc(RTBINS + 1, sizeof(int));
+  rc = init_stats_struct();
 
   serverContextP = malloc(sizeof(chronosServerContext_t));
   if (serverContextP == NULL) {
@@ -271,13 +191,15 @@ int main(int argc, char *argv[])
     goto failXit;
   }
 
-  if (serverContextP->runningMode == 4) {
+  if (serverContextP->runningMode == CHRONOS_SERVER_XACT_EVALUATION_MODE) {
     server_info("Running in transaction evaluation mode");
-    if (runTxnEvaluation(serverContextP) != CHRONOS_SERVER_SUCCESS) {
+    rc = runTxnEvaluation(serverContextP);
+    if (rc != CHRONOS_SERVER_SUCCESS) {
       server_error("Failed to run transaction evaluation mode");
       goto failXit;    
     }
-     goto cleanup;
+
+    goto cleanup;
   }
 
   /* set the signal handler for sigint */
@@ -588,7 +510,6 @@ cleanup:
 
     if (benchmark_handle_free(serverContextP->benchmarkCtxtP) != CHRONOS_SERVER_SUCCESS) {
       server_error("Failed to free handle");
-      goto failXit;
     }
   }
 
@@ -847,11 +768,13 @@ initProcessArguments(chronosServerContext_t *contextP)
   contextP->duration_sec = CHRONOS_EXPERIMENT_DURATION_SEC;
   contextP->desiredDelayBoundMS = CHRONOS_DESIRED_DELAY_BOUND_MS;
   contextP->alpha = CHRONOS_ALPHA;
-  contextP->initialLoad = 1;
+  contextP->initialLoad = 0;
 
   contextP->timeToDieFp = isTimeToDie;
 
   contextP->debugLevel = CHRONOS_DEBUG_LEVEL_MIN;
+
+  contextP->evaluated_txn = CHRONOS_USER_TXN_VIEW_STOCK;
 
   return 0;
 }
@@ -864,6 +787,17 @@ static int
 processArguments(int argc, char *argv[], chronosServerContext_t *contextP) 
 {
   int c;
+  int option_index = 0;
+
+  static struct option long_options[] = {
+                   {"evaluate-wcet",     no_argument,       0,  0 },
+                   {"xact-name",         required_argument, 0,  0 },
+                   {"print-samples",     no_argument      , &print_samples,  1 },
+                   {"initial-load",      no_argument      , 0,  0 },
+                   {"help",              no_argument      , 0,  'h' },
+                   {0,                   0,                 0,  0 }
+               };
+
 
   if (contextP == NULL) {
     server_error("Invalid argument");
@@ -873,8 +807,65 @@ processArguments(int argc, char *argv[], chronosServerContext_t *contextP)
   memset(contextP, 0, sizeof(*contextP));
   (void) initProcessArguments(contextP);
 
-  while ((c = getopt(argc, argv, "m:c:v:s:u:r:p:d:nh")) != -1) {
+  while (1) {
+
+    option_index = 0;
+    c = getopt_long(argc, argv, 
+                    "m:c:v:s:u:r:p:d:h",
+                    long_options, &option_index);
+    if (c == -1) {
+      break;
+    }
+
     switch(c) {
+      case 0:
+        if (long_options[option_index].flag != 0) {
+          break;
+        }
+        if (option_index == 0) {
+          contextP->runningMode = CHRONOS_SERVER_XACT_EVALUATION_MODE;
+          server_debug(2,"*** Running mode: %s", str(CHRONOS_SERVER_XACT_EVALUATION_MODE));
+        }
+
+        if (option_index == 1) {
+          if (strncmp(CHRONOS_SERVER_XACT_NAME_VIEW_STOCK, 
+                      optarg, 
+                      strlen(CHRONOS_SERVER_XACT_NAME_VIEW_STOCK)) == 0) {
+            contextP->evaluated_txn = CHRONOS_USER_TXN_VIEW_STOCK;
+          }
+          else if (strncmp(CHRONOS_SERVER_XACT_NAME_VIEW_PORTFOLIO, 
+                      optarg, 
+                      strlen(CHRONOS_SERVER_XACT_NAME_VIEW_PORTFOLIO)) == 0) {
+            contextP->evaluated_txn = CHRONOS_USER_TXN_VIEW_PORTFOLIO;
+          }
+          else if (strncmp(CHRONOS_SERVER_XACT_NAME_PURCHASE, 
+                      optarg, 
+                      strlen(CHRONOS_SERVER_XACT_NAME_PURCHASE)) == 0) {
+            contextP->evaluated_txn = CHRONOS_USER_TXN_PURCHASE;
+          }
+          else if (strncmp(CHRONOS_SERVER_XACT_NAME_SELL, 
+                      optarg, 
+                      strlen(CHRONOS_SERVER_XACT_NAME_SELL)) == 0) {
+            contextP->evaluated_txn = CHRONOS_USER_TXN_SALE;
+          }
+          else if (strncmp(CHRONOS_SERVER_XACT_NAME_REFRESH_STOCK, 
+                      optarg, 
+                      strlen(CHRONOS_SERVER_XACT_NAME_REFRESH_STOCK)) == 0) {
+            contextP->evaluated_txn = CHRONOS_USER_TXN_MAX;
+          }
+          else {
+            server_error("Invalid argument for %s", long_options[option_index].name);
+            goto failXit;
+          }
+        }
+
+        if (option_index == 3) {
+          contextP->initialLoad = 1;
+          server_debug(2, "*** Initial load requested");
+        }
+
+        break;
+
       case 'm':
         contextP->runningMode = atoi(optarg);
         server_debug(2,"*** Running mode: %d", contextP->runningMode);
@@ -915,11 +906,6 @@ processArguments(int argc, char *argv[], chronosServerContext_t *contextP)
         server_debug(2, "*** Debug Level: %d", contextP->debugLevel);
         break;
 
-      case 'n':
-        contextP->initialLoad = 0;
-        server_debug(2, "*** Do not perform initial load");
-        break;
-
       case 'h':
         chronos_usage();
         exit(0);
@@ -955,6 +941,9 @@ processArguments(int argc, char *argv[], chronosServerContext_t *contextP)
   contextP->maxUpdatePeriodMS = 0.5 * CHRONOS_UPDATE_PERIOD_RELAXATION_BOUND * contextP->initialValidityIntervalMS;
   contextP->updatePeriodMS  =  0.5 * contextP->initialValidityIntervalMS;
 
+  if (contextP->runningMode == CHRONOS_SERVER_XACT_EVALUATION_MODE) {
+    server_debug(2, "*** Evaluating transaction: %s", chronos_user_transaction_str[serverContextP->evaluated_txn]);
+  }
 
   return CHRONOS_SERVER_SUCCESS;
 
@@ -1811,9 +1800,13 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
 {
   int rc = CHRONOS_SERVER_SUCCESS;
   int i, j;
-  int txn_type;
   int txn_rc = 0;
   int num_data_items;
+  int num_success = 0;
+  int num_failures = 0;
+  int num_total_txns = 0;
+  int                values_list[CHRONOS_MAX_DATA_ITEMS_PER_XACT];
+  float              fvalues_list[CHRONOS_MAX_DATA_ITEMS_PER_XACT];
   const char        *pkey_list[CHRONOS_MAX_DATA_ITEMS_PER_XACT];
   CHRONOS_ENV_H   chronosEnvH;
   CHRONOS_CACHE_H chronosCacheH = NULL;
@@ -1861,20 +1854,25 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
     goto failXit;
   }
   
+  rc = benchmark_portfolios_stats_get(serverContextP->benchmarkCtxtP);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to get portfolios stat");
+    goto failXit;
+  }
+
   RTCAPTURE_START();
 
-  //for (txn_type = 0; txn_type < CHRONOS_USER_TXN_MAX; txn_type++) {
-  //for (txn_type = 0; txn_type < 1; txn_type++) {
-  int reps = 0;
-  txn_type = 0;
-  for (reps = 0; reps < 1000; reps ++) {
-    for (j = 0; j < 1000; ++ j) {
-
+  int current_rep = 0;
+  for (current_rep = 0; current_rep < NUM_SAMPLES; current_rep ++) {
 
       server_info("(%d) Evaluating: %s", 
-                  txn_type * 1000 + j, chronos_user_transaction_str[txn_type]);
+                  current_rep, chronos_user_transaction_str[serverContextP->evaluated_txn]);
 
-      requestH = chronosRequestCreate(txn_type, clientCacheH, chronosEnvH);
+      server_info("----------------------------------------------");
+
+      requestH = chronosRequestCreate(serverContextP->evaluated_txn, 
+                                      clientCacheH, 
+                                      chronosEnvH);
       if (requestH == NULL) {
         server_error("Failed to populate request");
         goto cleanup;
@@ -1883,7 +1881,7 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
       reqPacketP = (chronosRequestPacket_t *) requestH;
       num_data_items = reqPacketP->numItems;
 
-      switch(txn_type) {
+      switch(serverContextP->evaluated_txn) {
 
       case CHRONOS_USER_TXN_VIEW_STOCK:
         memset(pkey_list, 0, sizeof(pkey_list));
@@ -1963,6 +1961,19 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
         data_packetH = NULL;
         break;
 
+      case CHRONOS_SYS_TXN_UPDATE_STOCK:
+        memset(pkey_list, 0, sizeof(pkey_list));
+        for (i=0; i<num_data_items; i++) {
+          pkey_list[i] = reqPacketP->request_data.updateInfo[i].symbol;
+          fvalues_list[i] = reqPacketP->request_data.updateInfo[i].price;
+        }
+      
+        txn_rc = benchmark_refresh_quotes_list(num_data_items,
+                                               pkey_list,
+                                               fvalues_list,
+                                               serverContextP->benchmarkCtxtP);
+        break;
+
       default:
         assert(0);
       }
@@ -1973,11 +1984,26 @@ runTxnEvaluation(chronosServerContext_t *serverContextP)
         goto cleanup;
       }
 
+      num_total_txns ++;
+      if (txn_rc == CHRONOS_SERVER_SUCCESS) {
+        num_success ++;
+      }
+      else {
+        num_failures ++;
+      }
+
       RTCAPTURE();
-    }
+      server_info("----------------------------------------------");
+      fprintf(stderr, "\n\n");
   }
     
   RTCAPTURE_PRINT(); 
+  fprintf(stderr, "---------------------------\n");
+  fprintf(stderr, "Successful Xacts = %d\n", num_success);
+  fprintf(stderr, "Failed Xacts = %d\n", num_failures);
+  fprintf(stderr, "Total Xacts = %d\n", num_total_txns);
+  fprintf(stderr, "---------------------------\n");
+
   goto cleanup; 
 
 failXit:
@@ -2040,32 +2066,41 @@ cleanup:
 }
 #endif
 
-#define xstr(a) str(a)
-#define str(a) #a
-
 static void
 chronos_usage() 
 {
-  char usage[1024];
   char template[] =
+    "\n"
+    "Starts up a chronos server. \n"
+    "\n"
     "Usage: startup_server OPTIONS\n"
-    "Starts up a chronos server \n"
     "\n"
     "OPTIONS:\n"
-    "-m [mode]             running mode: 0: BASE, 1: Admission Control, 2: Adaptive Update, 3: Admission Control + Adaptive Update 4: Transaction Evaluation\n"
-    "-c [num]              number of clients it can accept (default: %d)\n"
-    "-v [num]              validity interval [in milliseconds] (default: %d ms)\n"
-    "-s [num]              sampling period [in seconds] (default: %d seconds)\n"
-    "-u [num]              number of update threads (default: %d)\n"
-    "-r [num]              duration of the experiment [in seconds] (default: %d seconds)\n"
-    "-p [num]              port to accept new connections (default: %d)\n"
+    "-m [mode]             running mode: \n"
+    "                      Valid options are:\n"
+    "                         0: BASE\n"
+    "                         1: Admission Control\n"
+    "                         2: Adaptive Update\n"
+    "                         3: Admission Control + Adaptive Update\n"
+    "                         4: Transaction Evaluation\n"
+    "-c [num]              number of clients it can accept (default: "xstr(CHRONOS_NUM_CLIENT_THREADS)")\n"
+    "-v [num]              validity interval [in milliseconds] (default: "xstr(CHRONOS_INITIAL_VALIDITY_INTERVAL_MS)" ms)\n"
+    "-s [num]              sampling period [in seconds] (default: "xstr(CHRONOS_SAMPLING_PERIOD_SEC)" seconds)\n"
+    "-u [num]              number of update threads (default: "xstr(CHRONOS_NUM_UPDATE_THREADS)")\n"
+    "-r [num]              duration of the experiment [in seconds] (default: "xstr(CHRONOS_EXPERIMENT_DURATION_SEC)" seconds)\n"
+    "-p [num]              port to accept new connections (default: "xstr(CHRONOS_SERVER_PORT)")\n"
     "-d [num]              debug level\n"
-    "-n                    do not perform initial load\n"
-    "-h                    help";
+    "--evaluate-wcet       evaluate transaction worst case execution time\n"
+    "--xact-name <xact>    evalulate the indicated transaction\n"
+    "                      Valid transactions are: \n"
+    "                         "CHRONOS_SERVER_XACT_NAME_VIEW_STOCK"\n"
+    "                         "CHRONOS_SERVER_XACT_NAME_VIEW_PORTFOLIO"\n"
+    "                         "CHRONOS_SERVER_XACT_NAME_PURCHASE"\n"
+    "                         "CHRONOS_SERVER_XACT_NAME_SELL"\n"
+    "                         "CHRONOS_SERVER_XACT_NAME_REFRESH_STOCK"\n"
+    "--print-samples       print timing samples\n"
+    "--initial-load        perform initial load\n"
+    "-h|--help             help";
 
-  snprintf(usage, sizeof(usage), template, 
-          CHRONOS_NUM_CLIENT_THREADS, CHRONOS_INITIAL_VALIDITY_INTERVAL_MS, CHRONOS_SAMPLING_PERIOD_SEC,
-          CHRONOS_NUM_UPDATE_THREADS, (int)CHRONOS_EXPERIMENT_DURATION_SEC, CHRONOS_SERVER_PORT);
-
-  printf("%s\n", usage);
+  printf("%s\n", template);
 }

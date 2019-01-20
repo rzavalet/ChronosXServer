@@ -223,6 +223,8 @@ typedef struct chronosServerContext_t
   int magic;
 
   int runningMode;
+  chronosUserTransaction_t  evaluated_txn;
+
   int debugLevel;
 
   int serverPort;

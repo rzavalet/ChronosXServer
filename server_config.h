@@ -96,4 +96,7 @@
 #else
 #define CHRONOS_NUM_CLIENT_THREADS    900
 #endif
+
+#define CHRONOS_TCP_QUEUE   1024
+
 #endif /* SERVER_CONFIG_H_ */
