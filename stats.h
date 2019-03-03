@@ -9,7 +9,7 @@
 /* Response time -- this can use a lot of memory */
 #define RTINCR 1000            /* 10 micro second increment */
 #define RTBINS 10000000/RTINCR /* The bins cover the range [0,10000000] us */
-#define NUM_SAMPLES   (1000)
+#define NUM_SAMPLES   (100)
 
 extern int *rtus;                       /* response times sample bins */
 extern long int *response_times_array;  /* response times table */
@@ -25,6 +25,23 @@ extern struct timeval xact_end;         /* sys time at the end of the iteration 
 do { \
  getTime(&xact_start);\
 } while (0)
+
+#define RTCAPTURE_END() \
+do { \
+ getTime(&xact_end);\
+ sample_response = udiff_time(&xact_start,&xact_end);\
+ if (sample_response<RTBINS*RTINCR){\
+    rtus[(int)(sample_response)/RTINCR]++;\
+ }else{ \
+    rtus[RTBINS]++;\
+ }\
+ rtusum += sample_response;\
+ if (sample_response > max_response_time) \
+   max_response_time = sample_response; \
+ if (sample_response < min_response_time) \
+   min_response_time = sample_response; \
+ response_times_array[current_rep%NUM_SAMPLES] = sample_response; \
+} while (0);
 
 #define RTCAPTURE() \
 do { \

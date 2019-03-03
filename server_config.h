@@ -8,6 +8,9 @@
 #ifndef SERVER_CONFIG_H_
 #define SERVER_CONFIG_H_
 
+/* These are the enabled components */
+#define CHRONOS_UPDATE_TRANSACTIONS_ENABLED
+#define CHRONOS_USER_TRANSACTIONS_ENABLED
 
 /* These are the directories where the databases and the datafiles live.
  * Before starting up the server, the datafiles should be moved to the
@@ -32,7 +35,7 @@
 #ifdef CHRONOS_DEBUG
 #define CHRONOS_NUM_SERVER_THREADS    1
 #else
-#define CHRONOS_NUM_SERVER_THREADS    350
+#define CHRONOS_NUM_SERVER_THREADS    1
 #endif
 #define CHRONOS_MAX_NUM_SERVER_THREADS  CHRONOS_NUM_SERVER_THREADS
 
@@ -43,7 +46,7 @@
 /* By default, updates to the quotes table is performed
  * by 100 threads
  */
-#define CHRONOS_NUM_UPDATE_THREADS    100
+#define CHRONOS_NUM_UPDATE_THREADS    1
 
 /* Each update thread handles 30 stocks
  */

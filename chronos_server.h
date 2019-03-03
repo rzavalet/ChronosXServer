@@ -223,7 +223,10 @@ typedef struct chronosServerContext_t
   int magic;
 
   int runningMode;
+
+  /* For xact evaluation */
   chronosUserTransaction_t  evaluated_txn;
+  unsigned int txn_size;
 
   int debugLevel;
 
