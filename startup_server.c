@@ -26,6 +26,7 @@
 #include "chronos_server.h"
 #include "chronos_queue.h"
 #include "stats.h"
+#include "thpool.h"
 
 #define xstr(s) str(s)
 #define str(s) #s
@@ -69,7 +70,7 @@ chronos_usage();
 static void *
 daListener(void *argP);
 
-static void *
+static void
 daHandler(void *argP);
 
 static void *
@@ -909,7 +910,7 @@ dispatchTableFn (chronosRequestPacket_t    *reqPacketP,
   }
 
   /* Wait until the transaction is processed by the processThread */
-  while (!txn_done) {
+  while (!txn_done && !time_to_die) {
     sleep(1);
   }
 
@@ -928,7 +929,7 @@ failXit:
  * Starting point for a handlerThread.
  * handle a transaction request
  */
-static void *
+static void
 daHandler(void *argP) 
 {
   int num_bytes;
@@ -946,11 +947,12 @@ daHandler(void *argP)
     goto cleanup;
   }
 
+while (!time_to_die) {
   CHRONOS_SERVER_THREAD_CHECK(infoP);
   CHRONOS_SERVER_CTX_CHECK(infoP->contextP);
 
   /*------------ Read the request -----------------*/
-  server_debug(3, "%lu: waiting new request", tid);
+  server_info("%lu: waiting new request", tid);
 
   memset(&reqPacket, 0, sizeof(reqPacket));
   char *buf = (char *) &reqPacket;
@@ -1031,7 +1033,7 @@ daHandler(void *argP)
     to_write -= written;
     buf += written;
   }
-  server_debug(3, "%lu: Replied to client: txn rc %d", tid, txn_rc);
+  server_info("%lu: Replied to client: txn rc %d", tid, txn_rc);
   /*-----------------------------------------------*/
 
 
@@ -1039,6 +1041,7 @@ daHandler(void *argP)
     server_info("%lu: Requested to die", tid);
     goto cleanup;
   }
+}
 
 cleanup:
 
@@ -1047,7 +1050,8 @@ cleanup:
   free(infoP);
 
   server_info("%lu: daHandler exiting", tid);
-  pthread_exit(NULL);
+  //pthread_exit(NULL);
+  return;
 }
 
 /*
@@ -1067,6 +1071,7 @@ daListener(void *argP)
   pthread_attr_t attr;
   const int stack_size = 0x100000; // 1 MB
   chronosServerThreadInfo_t *handlerInfoP = NULL;
+  threadpool thpoolH = NULL;
   pthread_t tid = pthread_self();
 
   chronosServerThreadInfo_t *infoP = (chronosServerThreadInfo_t *) argP;
@@ -1093,6 +1098,12 @@ daListener(void *argP)
   rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   if (rc != 0) {
     perror("failed to set detachable attribute");
+    goto cleanup;
+  }
+
+  thpoolH = thpool_init(10);
+  if (thpoolH == NULL) {
+    server_error("Failed to init thread pool");
     goto cleanup;
   }
 
@@ -1192,10 +1203,13 @@ daListener(void *argP)
       handlerInfoP->state = CHRONOS_SERVER_THREAD_STATE_RUN;
       handlerInfoP->magic = CHRONOS_SERVER_THREAD_MAGIC;
 
+#if 0
       rc = pthread_create(&handlerInfoP->thread_id,
                           &attr,
                           &daHandler,
                           handlerInfoP);
+#endif
+      rc = thpool_add_work(thpoolH, daHandler, handlerInfoP);
       if (rc != 0) {
         server_error("failed to spawn thread");
         goto cleanup;
@@ -1219,6 +1233,9 @@ daListener(void *argP)
 #endif
 
 cleanup:
+  thpool_destroy(thpoolH);
+  thpoolH = NULL;
+
   server_info("%lu: daListener exiting", tid);
   pthread_exit(NULL);
 }
