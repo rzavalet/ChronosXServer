@@ -74,8 +74,8 @@
 #define CHRONOS_MS_TO_S(_ms)            ((_ms) / 1000.0)
 #define CHRONOS_S_TO_MS(_s)             ((_s) * 1000.0)
 
-#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60.0)
-#define CHRONOS_S_TO_MIN(_s)            ((_s) / 60.0)
+#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60)
+#define CHRONOS_S_TO_MIN(_s)            ((_s) / 60)
 
 /* The sampling in Chronos is done every 30 seconds
  */

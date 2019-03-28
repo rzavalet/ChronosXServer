@@ -237,7 +237,7 @@ typedef struct chronosServerContext_t
 
   
   /* The duration of one chronos experiment */
-  double duration_sec;
+  long duration_sec;
 
   int (*timeToDieFp)(void);
 

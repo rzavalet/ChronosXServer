@@ -41,7 +41,9 @@ chronos_dequeue_transaction(txn_info_t *txnInfoP,
   txnQueueP->nextout %= CHRONOS_READY_QUEUE_SIZE;
   txnQueueP->occupied--;
 
-  server_info("dequeued with ticket: %llu (occupied %d)", txnInfoP->ticket, txnQueueP->occupied);
+  server_debug(CHRONOS_DEBUG_LEVEL_MAX, 
+               "dequeued with ticket: %llu (occupied %d)", 
+               txnInfoP->ticket, txnQueueP->occupied);
 
   /* now: either txnQueueP->occupied > 0 and txnQueueP->nextout is the index
        of the next occupied slot in the buffer, or
@@ -103,7 +105,9 @@ chronos_enqueue_transaction(txn_info_t         *txnInfoP,
   txnQueueP->nextin %= CHRONOS_READY_QUEUE_SIZE;
   txnQueueP->occupied++;
 
-  server_info("enqueued with ticket: %llu (occupied %d)", txnQueueP->ticketReq, txnQueueP->occupied);
+  server_debug(CHRONOS_DEBUG_LEVEL_MAX,
+              "enqueued with ticket: %llu (occupied %d)", 
+              txnQueueP->ticketReq, txnQueueP->occupied);
 
   /* now: either b->occupied < CHRONOS_READY_QUEUE_SIZE and b->nextin is the index
        of the next empty slot in the buffer, or

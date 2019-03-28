@@ -21,6 +21,8 @@
 #define server_warning(...) \
   server_msg("WARN", __VA_ARGS__)
 
+extern int server_debug_level;
+
 #define server_debug(level,...) \
   do {                                                         \
     if (server_debug_level >= level) {                        \
