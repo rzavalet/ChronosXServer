@@ -9,7 +9,7 @@
 /* Response time -- this can use a lot of memory */
 #define RTINCR 1000            /* 10 micro second increment */
 #define RTBINS 10000000/RTINCR /* The bins cover the range [0,10000000] us */
-#define NUM_SAMPLES   (100)
+#define NUM_SAMPLES   (1000)
 
 extern int *rtus;                       /* response times sample bins */
 extern long int *response_times_array;  /* response times table */

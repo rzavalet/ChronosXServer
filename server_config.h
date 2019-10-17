@@ -57,18 +57,14 @@
 
 /* The update period is initially set to 0.5 in Chronos
  */
-#define CHRONOS_INITIAL_VALIDITY_INTERVAL_MS  1000
+#define CHRONOS_INITIAL_VALIDITY_INTERVAL_MS  100
 
 /* By default, Chronos uses \beta=2
  */
 #define CHRONOS_UPDATE_PERIOD_RELAXATION_BOUND  2
 
 
-#ifdef CHRONOS_DEBUG
-#define CHRONOS_DESIRED_DELAY_BOUND_MS          1
-#else
-#define CHRONOS_DESIRED_DELAY_BOUND_MS          1000
-#endif
+#define CHRONOS_DESIRED_DELAY_BOUND_MS          500
 
 /* Some utility macros to perform conversion of time units */
 #define CHRONOS_MS_TO_S(_ms)            ((_ms) / 1000.0)

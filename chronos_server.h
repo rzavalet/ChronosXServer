@@ -11,6 +11,7 @@
 #include <chronos_packets.h>
 
 #include "server_config.h"
+#include "aup.h"
 
 
 
@@ -54,6 +55,10 @@ typedef enum chronosServerThreadType_t {
   (CHRONOS_SERVER_THREAD_MIN<=(_txn_type) && (_txn_type) < CHRONOS_SERVER_THREAD_MAX)
 
 
+
+/*---------------------------------------------------------------
+ * Utility macros for calculating timing metrics
+ *-------------------------------------------------------------*/
 typedef struct timespec chronos_time_t;
 #define NSEC_TO_SEC (1000000000)
 #define CHRONOS_TIME_FMT "%ld.%09ld"
@@ -153,16 +158,46 @@ typedef struct timespec chronos_time_t;
     (_time).tv_nsec = ((_ms) % SEC_TO_MSEC) * NSEC_TO_MSEC; \
   } while (0)
 
+#define SAMPLES_PER_MINUTE    2
+
+#define CHRONOS_TXN_TYPES     5
+
+typedef enum chronosTransactionResult_t {
+  CHRONOS_XACT_SUCCESS = 0,
+  CHRONOS_XACT_FAILED,
+  CHRONOS_XACT_ABORTED,
+  CHRONOS_XACT_BLOCKED,
+  CHRONOS_XACT_TIMELY,
+  CHRONOS_XACT_RESULT_TYPES
+} chronosTransactionResult_t;
 
 typedef struct chronosServerStats_t 
 {
+#if 0
   int            num_txns;
-  double         cumulative_time_ms;
+  long long      cumulative_time_ms;
 
   int            num_failed_txns;
 
   int            num_timely_txns;
+#endif
+
+  /*----------------------------*/
+  long long      xacts_history[60 / SAMPLES_PER_MINUTE];
+  long long      xacts_duration[60 / SAMPLES_PER_MINUTE];
+  long long      xacts_tpm[60 / SAMPLES_PER_MINUTE];
+  long long      xacts_timely[60 / SAMPLES_PER_MINUTE];
+  //long long      xacts_duration[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
+  //long long      xacts_tpm[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
 } chronosServerStats_t;
+
+
+typedef struct chronosServerThreadStats_t
+{
+  long long      xacts_executed[CHRONOS_TXN_TYPES][CHRONOS_XACT_RESULT_TYPES];
+  long long      xacts_duration[CHRONOS_TXN_TYPES];
+  long long      xacts_max_time[CHRONOS_TXN_TYPES];
+} chronosServerThreadStats_t;
 
 /* Information required for update transactions */
 typedef struct 
@@ -181,7 +216,7 @@ typedef struct
 typedef struct 
 {
   chronos_time_t txn_start;
-  chronos_time_t txn_enqueue;
+  struct timeval txn_enqueue;
   unsigned long long ticket;
   volatile int *txn_done;
   volatile int *txn_rc;
@@ -266,7 +301,7 @@ typedef struct chronosServerContext_t
 
   /* Each data item is associated with a validity interval,
    * this is the initial value. */
-  double initialValidityIntervalMS;
+  long long initialValidityIntervalMS;
   double minUpdatePeriodMS;
   double maxUpdatePeriodMS;
 
@@ -275,32 +310,30 @@ typedef struct chronosServerContext_t
   double updatePeriodMS;
 
   /* This is the "deadline" for the user txns */
-  double desiredDelayBoundMS;
+  long long desiredDelayBoundMS;
 
   /* These are the queues holding requested txns */
   chronos_queue_t userTxnQueue;
   chronos_queue_t sysTxnQueue;
 
   /*============ These fields control the sampling task ==========*/
-  volatile int          currentSlot;
-  chronosServerStats_t  stats_matrix[CHRONOS_SAMPLING_SPACE][CHRONOS_MAX_NUM_SERVER_THREADS];
+  chronosServerStats_t  performanceStats;
+  chronosServerThreadStats_t  *threadStatsArr;
+
   double                average_service_delay_ms;
   double                degree_timing_violation;
   double                smoth_degree_timing_violation;
   double                alpha;
+
   volatile int          num_txn_to_wait;
   int                   total_txns_enqueued;
 
+  chronos_aup_env_h     aup_env;
   chronosDataItem_t    *dataItemsArray;
   int                   szDataItemsArray;
 
   /* Metrics are obtained by sampling. This is the sampling interval */
-  double samplingPeriodSec;
-
-  /* Variables for the sampling timer */
-  timer_t sampling_timer_id;
-  struct itimerspec sampling_timer_et;
-  struct sigevent sampling_timer_ev;
+  long                  samplingPeriodSec;
   /*==============================================================*/
 
 

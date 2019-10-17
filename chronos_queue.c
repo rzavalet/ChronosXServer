@@ -130,7 +130,7 @@ cleanup:
 
 int
 chronos_dequeue_system_transaction(void *requestP_ret,
-                                   chronos_time_t *ts, 
+                                   struct timeval *ts, 
                                    chronosServerContext_t *contextP) 
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -164,7 +164,7 @@ cleanup:
 
 int
 chronos_enqueue_system_transaction(void *requestP, 
-                                   const chronos_time_t *ts, 
+                                   struct timeval *ts, 
                                    chronosServerContext_t *contextP) 
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -201,7 +201,7 @@ cleanup:
 
 int
 chronos_dequeue_user_transaction(void                   *requestP_ret, 
-                                 chronos_time_t         *ts, 
+                                 struct timeval         *ts, 
                                  unsigned long long     *ticket_ret,
                                  volatile int           **txn_done_ret,
                                  volatile int           **txn_rc_ret,
@@ -241,7 +241,7 @@ cleanup:
 
 int
 chronos_enqueue_user_transaction(void *requestP,
-                                 const chronos_time_t *ts, 
+                                 struct timeval *ts, 
                                  unsigned long long *ticket_ret, 
                                  volatile int *txn_done,
                                  volatile int *txn_rc,
@@ -281,4 +281,33 @@ cleanup:
 }
 
 
+int 
+chronos_queue_size(chronos_queue_t    *txnQueueP)
+{
+  if (txnQueueP == NULL) {
+    return 0;
+  }
+
+  return txnQueueP->occupied;
+}
+
+int
+chronos_system_queue_size(chronosServerContext_t *contextP) 
+{
+  chronos_queue_t *systemTxnQueueP = NULL;
+
+  systemTxnQueueP = &(contextP->sysTxnQueue);
+
+  return chronos_queue_size(systemTxnQueueP);
+}
+
+int
+chronos_user_queue_size(chronosServerContext_t *contextP) 
+{
+  chronos_queue_t *userTxnQueueP = NULL;
+
+  userTxnQueueP = &(contextP->userTxnQueue);
+
+  return chronos_queue_size(userTxnQueueP);
+}
 
