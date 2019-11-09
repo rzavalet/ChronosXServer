@@ -328,7 +328,7 @@ typedef struct chronosServerContext_t
   volatile int          num_txn_to_wait;
   int                   total_txns_enqueued;
 
-  chronos_aup_env_h     aup_env;
+  chronos_aup_env_h    *aup_env;
   chronosDataItem_t    *dataItemsArray;
   int                   szDataItemsArray;
 

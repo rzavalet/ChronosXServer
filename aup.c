@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/time.h>
 
 #include "aup.h"
 #include "common.h"
@@ -11,7 +12,29 @@
 #define CHRONOS_AUP_MAGIC_CHECK(_env)       (assert((_env)->magic == CHRONOS_AUP_MAGIC))
 #define CHRONOS_AUP_MAGIC_SET(_env)         ((_env)->magic = CHRONOS_AUP_MAGIC)
 
-chronos_aup_env_h
+typedef struct chronos_aup_data_t {
+  float       access_update_rate;
+  long long   access_frequency;
+  long long   update_frequency;
+  float       flexible_validity_interval;
+  float       absolute_validity_interval;
+  float       beta;
+
+  long long   period;       /* in MS */
+
+  long long   time_to_next_update;
+} chronos_aup_data_t;
+
+
+typedef struct chronos_aup_env_t {
+  int                        magic;
+  float                      beta;
+  int                        num_elements;
+  chronos_aup_data_t         data_array[1];
+} chronos_aup_env_t;
+
+
+chronos_aup_env_h *
 chronos_aup_env_alloc(int num_elements, float avi, float beta)
 {
 
@@ -63,7 +86,7 @@ cleanup:
 
 
 int
-chronos_aup_env_free(chronos_aup_env_h envH)
+chronos_aup_env_free(chronos_aup_env_h *envH)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -80,7 +103,7 @@ chronos_aup_env_free(chronos_aup_env_h envH)
 }
 
 int
-chronos_aup_af_incr(chronos_aup_env_h envH, int element_idx)
+chronos_aup_af_incr(chronos_aup_env_h *envH, int element_idx)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -97,7 +120,7 @@ chronos_aup_af_incr(chronos_aup_env_h envH, int element_idx)
 }
 
 int
-chronos_aup_af_reset(chronos_aup_env_h envH, int element_idx)
+chronos_aup_af_reset(chronos_aup_env_h *envH, int element_idx)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -114,7 +137,7 @@ chronos_aup_af_reset(chronos_aup_env_h envH, int element_idx)
 }
 
 int
-chronos_aup_uf_incr(chronos_aup_env_h envH, int element_idx)
+chronos_aup_uf_incr(chronos_aup_env_h *envH, int element_idx)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -131,7 +154,7 @@ chronos_aup_uf_incr(chronos_aup_env_h envH, int element_idx)
 }
 
 int
-chronos_aup_uf_reset(chronos_aup_env_h envH, int element_idx)
+chronos_aup_uf_reset(chronos_aup_env_h *envH, int element_idx)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -149,7 +172,7 @@ chronos_aup_uf_reset(chronos_aup_env_h envH, int element_idx)
 
 
 int 
-chronos_aup_reset_all(chronos_aup_env_h envH)
+chronos_aup_reset_all(chronos_aup_env_h *envH)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
   int              i;
@@ -166,9 +189,43 @@ chronos_aup_reset_all(chronos_aup_env_h envH)
   return rc;
 }
 
+int
+chronos_aup_get_n_expired(chronos_aup_env_h *envH, int out_array_sz, int *out_array)
+{
+  int              rc = CHRONOS_SERVER_SUCCESS;
+  int              i;
+  chronos_aup_env_t *envP = NULL;
+  struct timeval   current_time;
+  long long        current_time_msec;
+  chronos_aup_data_t  *dataP = NULL;
+  int              num_found = 0;
+
+  envP = (chronos_aup_env_t *) envH;
+  CHRONOS_AUP_MAGIC_CHECK(envP);
+
+  gettimeofday(&current_time, NULL);
+  current_time_msec = current_time.tv_sec * 1000 + current_time.tv_usec/1000;
+
+  for (i=0; i<out_array_sz; i++) {
+    out_array[i] = -1;
+  }
+
+  for (i=0; i<envP->num_elements && num_found < out_array_sz; i++) {
+    dataP = &(envP->data_array[i]);
+
+    if (dataP->time_to_next_update <= current_time_msec) {
+      out_array[num_found] = i;
+      num_found ++;
+    }
+  }
+
+  return rc;
+}
+
+
 #define MIN(a,b)      (a < b ? a : b)
 int
-chronos_aup_relax(chronos_aup_env_h envH, float ds_k)
+chronos_aup_relax(chronos_aup_env_h *envH, float ds_k)
 {
 
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -214,7 +271,7 @@ cleanup:
 }
 
 const chronos_aup_data_t *
-chronos_aup_data_get(chronos_aup_env_h envH, int element_idx)
+chronos_aup_data_get(chronos_aup_env_h *envH, int element_idx)
 {
 
   chronos_aup_env_t *envP = NULL;
@@ -228,7 +285,7 @@ chronos_aup_data_get(chronos_aup_env_h envH, int element_idx)
 }
 
 int
-chronos_aup_data_dump(chronos_aup_env_h envH, int element_idx)
+chronos_aup_data_dump(chronos_aup_env_h *envH, int element_idx)
 {
 
   chronos_aup_env_t *envP = NULL;

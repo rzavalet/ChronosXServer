@@ -198,7 +198,6 @@ int main(int argc, char *argv[])
   char **pkeys_list = NULL;
   int    num_pkeys = 0;
   chronos_time_t  system_start;
-  unsigned long long initial_update_time_ms;
 
   rc = init_stats_struct();
 
@@ -339,26 +338,7 @@ int main(int argc, char *argv[])
   server_info("num_pkeys: %d, pkeys_list: %p",
               num_pkeys, pkeys_list);
 
-  serverContextP->dataItemsArray = calloc(num_pkeys, sizeof(chronosDataItem_t));
-  if (serverContextP->dataItemsArray == NULL) {
-    server_error("Could not allocate data items array");
-    goto failXit;
-  }
-  serverContextP->szDataItemsArray = num_pkeys;
-
   CHRONOS_TIME_GET(system_start);
-  initial_update_time_ms = CHRONOS_TIME_TO_MS(system_start);
-  initial_update_time_ms += serverContextP->minUpdatePeriodMS;
-
-  for (i=0; i<num_pkeys; i++) {
-    serverContextP->dataItemsArray[i].index = i;
-    serverContextP->dataItemsArray[i].dataItem = pkeys_list[i];
-    serverContextP->dataItemsArray[i].updatePeriodMS[0] = serverContextP->minUpdatePeriodMS;
-    serverContextP->dataItemsArray[i].nextUpdateTimeMS = initial_update_time_ms;
-    server_debug(3, "%d next update time: %llu", i, initial_update_time_ms);
-  }
-
-  dump_data_items_array(num_pkeys, serverContextP->dataItemsArray, "main_thread.txt");
 
   serverContextP->aup_env = chronos_aup_env_alloc(num_pkeys  /* num_elements */, 
                                                   1.0        /* avi */, 
@@ -413,7 +393,6 @@ int main(int argc, char *argv[])
 
     /* Set the update specific data */
     updateThreadInfoArrP[i].first_symbol_id = i * serverContextP->numUpdatesPerUpdateThread;
-    updateThreadInfoArrP[i].parameters.updateParameters.dataItemsArray = &(serverContextP->dataItemsArray[i * serverContextP->numUpdatesPerUpdateThread]);
     updateThreadInfoArrP[i].parameters.updateParameters.num_stocks = serverContextP->numUpdatesPerUpdateThread;
     server_debug(5,"Thread: %d, will handle from %d to %d",
                   updateThreadInfoArrP[i].thread_num, 
@@ -543,10 +522,6 @@ cleanup:
   if (serverContextP) {
     pthread_cond_destroy(&serverContextP->startThreadsWait);
     pthread_mutex_destroy(&serverContextP->startThreadsMutex);
-
-    if (serverContextP->dataItemsArray) {
-      free(serverContextP->dataItemsArray);
-    }
 
     if (serverContextP->aup_env) {
       chronos_aup_env_free(serverContextP->aup_env);
@@ -1635,7 +1610,6 @@ updateThread(void *argP)
   int    i;
   int    rc = CHRONOS_SERVER_SUCCESS;
   int    num_updates = 0;
-  chronosDataItem_t *dataItemArray =  NULL;
   volatile int current_slot;
   struct timeval current_time;
   chronos_time_t   next_update_time;
@@ -1647,6 +1621,7 @@ updateThread(void *argP)
   CHRONOS_REQUEST_H requestH = NULL;
   pthread_t tid = pthread_self();
   int update_period = 0;
+  int *data_items_to_update = NULL;
 
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
@@ -1677,19 +1652,11 @@ updateThread(void *argP)
   num_updates = infoP->parameters.updateParameters.num_stocks;
   assert(num_updates > 0);
 
-  dataItemArray = infoP->parameters.updateParameters.dataItemsArray;
-  assert(dataItemArray != NULL);
+  data_items_to_update = calloc(num_updates, sizeof(int));
+  assert(data_items_to_update);
 
   update_period = infoP->contextP->initialValidityIntervalMS;
 
-  {
-    char file_name[32];
-
-    snprintf(file_name, sizeof(file_name), 
-              "thread_%d.txt", infoP->thread_num);
-    dump_data_items_array(num_updates, dataItemArray, file_name);
-
-  }
   while (1) {
     CHRONOS_SERVER_THREAD_CHECK(infoP);
     CHRONOS_SERVER_CTX_CHECK(infoP->contextP);
@@ -1699,65 +1666,36 @@ updateThread(void *argP)
                 tid, infoP->thread_num);
     getTime(&current_time);
 
-    if (infoP->contextP->runningMode == CHRONOS_SERVER_MODE_BASE ||
-        infoP->contextP->runningMode == CHRONOS_SERVER_MODE_AUP) {
-
-      /* NEW_TODO: This does not honor the assigned stocks per thread */
-      requestH = chronosRequestCreate(num_updates,
-                                      CHRONOS_USER_TXN_MAX,
-                                      clientCacheH, 
-                                      chronosEnvH);
-      if (requestH == NULL) {
-        server_error("Failed to populate request");
-        goto cleanup;
-      }
-
-      rc = chronos_enqueue_system_transaction(requestH,
-                                              &current_time,
-                                              infoP->contextP);
-      if (rc != CHRONOS_SERVER_SUCCESS) {
-        server_error("Failed to enqueue request");
-        goto cleanup;
-      }
-
-      rc = chronosRequestFree(requestH);
-      if (rc != CHRONOS_SERVER_SUCCESS) {
-        server_error("Failed to release request");
-        goto cleanup;
-      }
+    /*--------------------------------------------------
+     * TODO: According to the paper, a server thread
+     * is responsible for refreshing only a certain
+     * chunk of the data items. 
+     *
+     * This code makes the server thread pick a set
+     * of n random data items.
+     *-------------------------------------------------*/
+    requestH = chronosRequestCreate(num_updates,
+                                    CHRONOS_USER_TXN_MAX,
+                                    clientCacheH, 
+                                    chronosEnvH);
+    if (requestH == NULL) {
+      server_error("Failed to populate request");
+      goto cleanup;
     }
 
-#if 0
-    for (i=0; i<num_updates; i++) {
-
-      if (dataItemArray[i].nextUpdateTimeMS <= current_time_ms) {
-        int   index = dataItemArray[i].index;
-        char *pkey = dataItemArray[i].dataItem;
-        chronosRequestPacket_t request;
-        request.txn_type = CHRONOS_USER_TXN_MAX; /* represents sys xact */
-        request.numItems = 1;
-        strncpy(request.request_data.symbolInfo[0].symbol, pkey, sizeof(request.request_data.symbolInfo[0].symbol));
-        server_debug(3, "(thr: %d) (%llu <= %llu) [%d] Enqueuing update for key: %d, %s",
-                      infoP->thread_num, 
-                      dataItemArray[i].nextUpdateTimeMS,
-                      current_time_ms,
-                      i,
-                      index,
-                      pkey);
-
-        processRefreshTransaction(&request, infoP);
-
-        current_slot = infoP->contextP->currentSlot;
-        dataItemArray[i].updateFrequency[current_slot]++;
-
-        CHRONOS_TIME_GET(next_update_time);
-        next_update_time_ms = CHRONOS_TIME_TO_MS(next_update_time);
-        dataItemArray[i].nextUpdateTimeMS = next_update_time_ms + dataItemArray[i].updatePeriodMS[current_slot];
-        server_debug(3, "(thr: %d) %d next update time: %llu",
-                          infoP->thread_num, i, dataItemArray[i].nextUpdateTimeMS);
-      }
+    rc = chronos_enqueue_system_transaction(requestH,
+                                            &current_time,
+                                            infoP->contextP);
+    if (rc != CHRONOS_SERVER_SUCCESS) {
+      server_error("Failed to enqueue request");
+      goto cleanup;
     }
-#endif
+
+    rc = chronosRequestFree(requestH);
+    if (rc != CHRONOS_SERVER_SUCCESS) {
+      server_error("Failed to release request");
+      goto cleanup;
+    }
 
     if (waitPeriod(update_period) != CHRONOS_SERVER_SUCCESS) {
       goto cleanup;
