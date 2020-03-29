@@ -3,7 +3,6 @@
 
 typedef void chronos_aup_env_h;
 
-struct chronos_aup_data_t;
 typedef struct chronos_aup_data_t chronos_aup_data_t;
 
 chronos_aup_env_h *
@@ -35,4 +34,7 @@ chronos_aup_data_dump(chronos_aup_env_h *envH, int element_idx);
 
 int 
 chronos_aup_reset_all(chronos_aup_env_h *envH);
+
+int
+chronos_aup_get_n_expired(chronos_aup_env_h *envH, int out_array_sz, int *out_array);
 #endif

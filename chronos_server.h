@@ -12,24 +12,10 @@
 
 #include "server_config.h"
 #include "aup.h"
+#include "stats.h"
+#include "chronos_queue.h"
 
 
-
-#define CHRONOS_SERVER_CTX_MAGIC      (0xBACA)
-#define CHRONOS_SERVER_THREAD_MAGIC   (0xCACA)
-
-#define CHRONOS_SERVER_CTX_CHECK(_ctxt)    assert((_ctxt)->magic == CHRONOS_SERVER_CTX_MAGIC)
-#define CHRONOS_SERVER_THREAD_CHECK(_thr)    assert((_thr)->magic == CHRONOS_SERVER_THREAD_MAGIC)
-
-#define CHRONOS_MODE_BASE   (0)
-#define CHRONOS_MODE_AC     (1)
-#define CHRONOS_MODE_AUP    (2)
-#define CHRONOS_MODE_FULL   (3)
-
-#define IS_CHRONOS_MODE_BASE(_ctxt)   ((_ctxt)->runningMode == CHRONOS_MODE_BASE)
-#define IS_CHRONOS_MODE_AC(_ctxt)     ((_ctxt)->runningMode == CHRONOS_MODE_AC)
-#define IS_CHRONOS_MODE_AUP(_ctxt)    ((_ctxt)->runningMode == CHRONOS_MODE_AUP)
-#define IS_CHRONOS_MODE_FULL(_ctxt)   ((_ctxt)->runningMode == CHRONOS_MODE_FULL)
 
 typedef enum chronosServerThreadState_t {
   CHRONOS_SERVER_THREAD_STATE_MIN = 0,
@@ -44,214 +30,10 @@ typedef enum chronosServerThreadType_t {
   CHRONOS_SERVER_THREAD_LISTENER = CHRONOS_SERVER_THREAD_MIN,
   CHRONOS_SERVER_THREAD_UPDATE,
   CHRONOS_SERVER_THREAD_PROCESSING,
+  CHRONOS_SERVER_THREAD_SAMPLING,
   CHRONOS_SERVER_THREAD_MAX,
   CHRONOS_SERVER_THREAD_INVAL=CHRONOS_SERVER_THREAD_MAX
 } chronosServerThreadType_t;
-
-#define CHRONOS_SERVER_THREAD_NAME(_txn_type) \
-  ((CHRONOS_SERVER_THREAD_MIN<=(_txn_type) && (_txn_type) < CHRONOS_SERVER_THREAD_MAX) ? (chronosServerThreadNames[(_txn_type)]) : "INVALID")
-
-#define CHRONOS_SERVER_THREAD_IS_VALID(_txn_type) \
-  (CHRONOS_SERVER_THREAD_MIN<=(_txn_type) && (_txn_type) < CHRONOS_SERVER_THREAD_MAX)
-
-
-
-/*---------------------------------------------------------------
- * Utility macros for calculating timing metrics
- *-------------------------------------------------------------*/
-typedef struct timespec chronos_time_t;
-#define NSEC_TO_SEC (1000000000)
-#define CHRONOS_TIME_FMT "%ld.%09ld"
-#define CHRONOS_TIME_ARG(_t) (_t).tv_sec, (_t).tv_nsec
-#define CHRONOS_TIME_CLEAR(_t) \
-  do {\
-    (_t).tv_sec = 0; \
-    (_t).tv_nsec = 0; \
-  }while (0)
-
-#define CHRONOS_TIME_GET(_t) clock_gettime(CLOCK_REALTIME, &(_t))
-
-#define CHRONOS_TIME_NANO_OFFSET_GET(_begin, _end, _off)    \
-  do {                  \
-    chronos_time_t _tf = _end;            \
-    chronos_time_t _to = _begin;          \
-                  \
-    if (_tf.tv_sec > _to.tv_sec && _tf.tv_nsec < _to.tv_nsec) {   \
-      _tf.tv_sec --;              \
-      _tf.tv_nsec += NSEC_TO_SEC;         \
-    }                 \
-    else if (_tf.tv_sec < _to.tv_sec && _tf.tv_nsec > _to.tv_nsec) {  \
-      _to.tv_sec --;              \
-      _to.tv_nsec += NSEC_TO_SEC;         \
-    }                 \
-    (_off).tv_sec = _tf.tv_sec - _to.tv_sec;        \
-    (_off).tv_nsec = _tf.tv_nsec - _to.tv_nsec;       \
-  } while(0)
-
-#define CHRONOS_TIME_SEC_OFFSET_GET(_begin, _end, _off)     \
-  do {                  \
-    chronos_time_t _tf = _end;            \
-    chronos_time_t _to = _begin;          \
-                  \
-    if (_tf.tv_sec > _to.tv_sec && _tf.tv_nsec < _to.tv_nsec) {   \
-      _tf.tv_sec --;              \
-      _tf.tv_nsec += NSEC_TO_SEC;         \
-    }                 \
-    else if (_tf.tv_sec < _to.tv_sec && _tf.tv_nsec > _to.tv_nsec) {  \
-      _to.tv_sec --;              \
-      _to.tv_nsec += NSEC_TO_SEC;         \
-    }                 \
-    (_off).tv_sec = _tf.tv_sec - _to.tv_sec;        \
-    (_off).tv_nsec = 0;             \
-  } while(0)
-
-#define CHRONOS_TIME_ADD(_t1, _t2, _res)      \
-      do {              \
-  chronos_time_t _tf = _t1;       \
-  chronos_time_t _to = _t2;       \
-  (_res).tv_sec = 0;          \
-  (_res).tv_nsec = (_tf).tv_nsec + (_to).tv_nsec;   \
-                \
-  if ((_res).tv_nsec > NSEC_TO_SEC) {     \
-    (_res).tv_sec = (_res).tv_nsec / NSEC_TO_SEC; \
-    (_res).tv_nsec = (_res).tv_nsec % NSEC_TO_SEC;  \
-  }             \
-                \
-  (_res).tv_sec += (_tf).tv_sec + (_to).tv_sec;   \
-                \
-      } while(0)
-
-#define CHRONOS_TIME_AVERAGE(_sum, _num, _res)        \
-  do {                  \
-    if (_num != 0) {              \
-      long long mod;              \
-      (_res).tv_sec  = (_sum).tv_sec / (signed long)_num;   \
-      mod =  NSEC_TO_SEC * ((_sum).tv_sec % (signed long)_num);   \
-      (_res).tv_nsec = (mod + (_sum).tv_nsec) / (signed long)_num;  \
-      if ((_res).tv_nsec >= NSEC_TO_SEC) {        \
-  mod = (_res).tv_nsec / NSEC_TO_SEC;       \
-  (_res).tv_sec += mod;           \
-  mod = (_res).tv_nsec % NSEC_TO_SEC;       \
-  (_res).tv_nsec = mod;           \
-      }                 \
-    }                 \
-  }while(0)
-
-#define CHRONOS_TIME_POSITIVE(_time)    \
-  ((_time).tv_sec > 0 && (_time).tv_nsec > 0)
-
-#define CHRONOS_TIME_ZERO(_time)    \
-  ((_time).tv_sec == 0 && (_time).tv_nsec == 0)
-
-#define CHRONOS_TIME_NEGATIVE(_time)    \
-  ((_time).tv_sec < 0 && (_time).tv_nsec < 0)
-
-#define SEC_TO_MSEC   (1000)
-#define NSEC_TO_MSEC  (1000000)
-
-#define CHRONOS_TIME_TO_MS(_time) \
-  ((_time).tv_sec * SEC_TO_MSEC + (_time).tv_nsec / NSEC_TO_MSEC)
-
-#define CHRONOS_MS_TO_TIME(_ms, _time) \
-  do { \
-    (_time).tv_sec = (_ms) / SEC_TO_MSEC; \
-    (_time).tv_nsec = ((_ms) % SEC_TO_MSEC) * NSEC_TO_MSEC; \
-  } while (0)
-
-#define SAMPLES_PER_MINUTE    2
-
-#define CHRONOS_TXN_TYPES     5
-
-typedef enum chronosTransactionResult_t {
-  CHRONOS_XACT_SUCCESS = 0,
-  CHRONOS_XACT_FAILED,
-  CHRONOS_XACT_ABORTED,
-  CHRONOS_XACT_BLOCKED,
-  CHRONOS_XACT_TIMELY,
-  CHRONOS_XACT_RESULT_TYPES
-} chronosTransactionResult_t;
-
-typedef struct chronosServerStats_t 
-{
-#if 0
-  int            num_txns;
-  long long      cumulative_time_ms;
-
-  int            num_failed_txns;
-
-  int            num_timely_txns;
-#endif
-
-  /*----------------------------*/
-  long long      xacts_history[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_duration[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_tpm[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_timely[60 / SAMPLES_PER_MINUTE];
-  //long long      xacts_duration[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
-  //long long      xacts_tpm[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
-} chronosServerStats_t;
-
-
-typedef struct chronosServerThreadStats_t
-{
-  long long      xacts_executed[CHRONOS_TXN_TYPES][CHRONOS_XACT_RESULT_TYPES];
-  long long      xacts_duration[CHRONOS_TXN_TYPES];
-  long long      xacts_max_time[CHRONOS_TXN_TYPES];
-} chronosServerThreadStats_t;
-
-/* Information required for update transactions */
-typedef struct 
-{
-  const char *pkey;         /* Primary key */
-} update_txn_info_t;
-
-/* Information required for view_stock transactions */
-typedef struct 
-{
-  int num_keys;
-  chronosSymbol_t symbolInfo[CHRONOS_MAX_DATA_ITEMS_PER_XACT];
-} view_txn_info_t;
-
-/* This is the structure of a transaction request in Chronos */
-typedef struct 
-{
-  chronos_time_t txn_start;
-  struct timeval txn_enqueue;
-  unsigned long long ticket;
-  volatile int *txn_done;
-  volatile int *txn_rc;
-
-  chronosRequestPacket_t  request;
-} txn_info_t;
-  
-/* This is the structure of a ready queue in Chronos. 
- */
-typedef struct 
-{
-  txn_info_t txnInfoArr[CHRONOS_READY_QUEUE_SIZE]; /* Txn requests are stored here */
-  int occupied;
-  int nextin;
-  int nextout;
-  unsigned long long ticketReq;
-  unsigned long long ticketDone;
-  pthread_mutex_t mutex;
-  pthread_cond_t more;
-  pthread_cond_t less;
-  pthread_cond_t ticketReady;
-} chronos_queue_t;
-
-
-typedef struct chronosDataItem_t
-{
-  int      index;
-  char    *dataItem;
-
-  unsigned long long nextUpdateTimeMS;
-  volatile double accessFrequency[CHRONOS_SAMPLING_SPACE];
-  volatile double updateFrequency[CHRONOS_SAMPLING_SPACE];
-  volatile double accessUpdateRatio[CHRONOS_SAMPLING_SPACE];
-  volatile double updatePeriodMS[CHRONOS_SAMPLING_SPACE];
-} chronosDataItem_t;
 
 typedef struct chronosServerContext_t 
 {
@@ -274,13 +56,10 @@ typedef struct chronosServerContext_t
   /* The duration of one chronos experiment */
   long duration_sec;
 
-  int (*timeToDieFp)(void);
-
   
   /* We can only create a limited number of 
    * client threads. */
   int numClientsThreads;
-  int currentNumClients;
 
   /* Apart from client threads, we also have
    * update threads - threads that update the
@@ -302,8 +81,6 @@ typedef struct chronosServerContext_t
   /* Each data item is associated with a validity interval,
    * this is the initial value. */
   long long initialValidityIntervalMS;
-  double minUpdatePeriodMS;
-  double maxUpdatePeriodMS;
 
   /* Each data item is refreshed in a certain interval.
    * This update period is related to the validityIntervalms */
@@ -313,11 +90,11 @@ typedef struct chronosServerContext_t
   long long desiredDelayBoundMS;
 
   /* These are the queues holding requested txns */
-  chronos_queue_t userTxnQueue;
-  chronos_queue_t sysTxnQueue;
+  chronos_queue_t *userTxnQueue;
+  chronos_queue_t *sysTxnQueue;
 
   /*============ These fields control the sampling task ==========*/
-  chronosServerStats_t  performanceStats;
+  chronosServerStats_t        *performanceStatsP;
   chronosServerThreadStats_t  *threadStatsArr;
 
   double                average_service_delay_ms;
@@ -329,11 +106,6 @@ typedef struct chronosServerContext_t
   int                   total_txns_enqueued;
 
   chronos_aup_env_h    *aup_env;
-  chronosDataItem_t    *dataItemsArray;
-  int                   szDataItemsArray;
-
-  /* Metrics are obtained by sampling. This is the sampling interval */
-  long                  samplingPeriodSec;
   /*==============================================================*/
 
 
@@ -344,7 +116,6 @@ typedef struct chronosServerContext_t
 
 typedef struct chronosUpdateThreadInfo_t {
   int    num_stocks;       /* How many stocks should the thread handle */
-  chronosDataItem_t    *dataItemsArray;      /* Pointer to the array that contains the stocks managed by this thread */
 } chronosUpdateThreadInfo_t;
 
 typedef struct chronosServerThreadInfo_t {
@@ -353,7 +124,6 @@ typedef struct chronosServerThreadInfo_t {
   int       thread_num;
   int       first_symbol_id;
   int       socket_fd;
-  FILE     *trace_file;
   chronosServerThreadState_t state;
   chronosServerThreadType_t thread_type;
   chronosServerContext_t *contextP;

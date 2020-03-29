@@ -66,19 +66,16 @@
 
 #define CHRONOS_DESIRED_DELAY_BOUND_MS          500
 
-/* Some utility macros to perform conversion of time units */
-#define CHRONOS_MS_TO_S(_ms)            ((_ms) / 1000.0)
-#define CHRONOS_S_TO_MS(_s)             ((_s) * 1000.0)
-
-#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60)
-#define CHRONOS_S_TO_MIN(_s)            ((_s) / 60)
 
 /* The sampling in Chronos is done every 30 seconds
  */
 #define CHRONOS_SAMPLING_PERIOD_SEC     (30)
+#define CHRONOS_SAMPLING_SLOTS          (60 / 2)
+#define CHRONOS_SAMPLES_PER_MINUTE      (60 / CHRONOS_SAMPLING_PERIOD_SEC)
 
 /* Chronos experiments take 15 minutes
  */
+#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60)
 #ifdef CHRONOS_DEBUG
 #define CHRONOS_EXPERIMENT_DURATION_SEC (CHRONOS_MIN_TO_S(1))
 #else

@@ -1,13 +1,23 @@
 #ifndef _CHRONOS_QUEUE_H_
 #define _CHRONOS_QUEUE_H_
 
-#include "chronos_server.h"
+typedef struct chronos_queue_t chronos_queue_t;
+
+chronos_queue_t *
+chronos_queue_alloc(int (*timeToDieFp)(void));
+
+void
+chronos_queue_free(chronos_queue_t *queueP);
 
 int
-chronos_dequeue_system_transaction(void *requestP_ret, struct timeval *ts, chronosServerContext_t *contextP);
+chronos_dequeue_system_transaction(void *requestP_ret, 
+                                   struct timeval *ts, 
+                                   chronos_queue_t *systemTxnQueueP);
 
 int
-chronos_enqueue_system_transaction(void *requestP, struct timeval *ts, chronosServerContext_t *contextP);
+chronos_enqueue_system_transaction(void *requestP, 
+                                   struct timeval *ts, 
+                                   chronos_queue_t *systemTxnQueueP);
 
 int
 chronos_enqueue_user_transaction(void                 *requestP,
@@ -15,7 +25,7 @@ chronos_enqueue_user_transaction(void                 *requestP,
                                  unsigned long long   *ticket_ret, 
                                  volatile int         *txn_done,
                                  volatile int         *txn_rc,
-                                 chronosServerContext_t *contextP);
+                                 chronos_queue_t      *userTxnQueueP);
 
 int
 chronos_dequeue_user_transaction(void               *requestP_ret,
@@ -23,12 +33,16 @@ chronos_dequeue_user_transaction(void               *requestP_ret,
                                  unsigned long long *ticket_ret,
                                  volatile int       **txn_done_ret,
                                  volatile int       **txn_rc_ret,
-                                 chronosServerContext_t *contextP);
+                                 chronos_queue_t     *userTxnQueueP);
+
+#if 0
+int
+chronos_system_queue_size(chronos_queue_t *queueP);
 
 int
-chronos_system_queue_size(chronosServerContext_t *contextP);
+chronos_user_queue_size(chronos_queue_t *queueP);
+#endif
 
-int
-chronos_user_queue_size(chronosServerContext_t *contextP);
-
+int 
+chronos_queue_size(chronos_queue_t    *txnQueueP);
 #endif

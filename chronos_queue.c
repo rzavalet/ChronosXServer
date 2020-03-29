@@ -2,14 +2,108 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
+#include <pthread.h>
+
 #include <chronos_transactions.h>
 
 #include "chronos_queue.h"
+#include "chronos_packets.h"
+#include "server_config.h"
 #include "common.h"
 
+/* This is the structure of a transaction request in Chronos */
+typedef struct txn_info_t
+{
+  struct timeval txn_enqueue;
+
+  unsigned long long ticket;
+
+  volatile int *txn_done;
+  volatile int *txn_rc;
+
+  chronosRequestPacket_t  request;
+} txn_info_t;
+  
+/* This is the structure of a ready queue in Chronos. 
+ */
+typedef struct chronos_queue_t
+{
+  txn_info_t txnInfoArr[CHRONOS_READY_QUEUE_SIZE]; /* Txn requests are stored here */
+  int occupied;
+  int nextin;
+  int nextout;
+  unsigned long long ticketReq;
+  unsigned long long ticketDone;
+  pthread_mutex_t mutex;
+  pthread_cond_t more;
+  pthread_cond_t less;
+  pthread_cond_t ticketReady;
+
+  int (*timeToDieFp)(void);
+} chronos_queue_t;
+
+
+void
+chronos_queue_free(chronos_queue_t *queueP)
+{
+  if (queueP == NULL) {
+    return;
+  }
+
+  pthread_cond_destroy(&queueP->more);
+  pthread_cond_destroy(&queueP->less);
+  pthread_mutex_destroy(&queueP->mutex);
+
+  memset(queueP, 0, sizeof(*queueP));
+  free(queueP);
+
+  return;
+
+}
+
+chronos_queue_t *
+chronos_queue_alloc(int (*timeToDieFp)(void))
+{
+  chronos_queue_t *queueP = NULL;
+
+  queueP = calloc(1, sizeof(chronos_queue_t));
+  if (queueP == NULL) {
+    goto failXit;
+  }
+
+  if (pthread_mutex_init(&queueP->mutex, NULL) != 0) {
+    server_error("Failed to init mutex");
+    goto failXit;
+  }
+
+  if (pthread_cond_init(&queueP->more, NULL) != 0) {
+    server_error("Failed to init condition variable");
+    goto failXit;
+  }
+
+  if (pthread_cond_init(&queueP->less, NULL) != 0) {
+    server_error("Failed to init condition variable");
+    goto failXit;
+  }
+
+  queueP->timeToDieFp = timeToDieFp;
+
+  return queueP;
+
+failXit:
+  chronos_queue_free(queueP);
+  return NULL;
+}
+
+/*--------------------------------------------------------
+ * Dequeue a transaction request from the queue specified
+ * by the caller. The transaction information is stored
+ * at the address specified by the txnInfoP pointer.
+ *------------------------------------------------------*/
 static int
-chronos_dequeue_transaction(txn_info_t *txnInfoP, 
-                            int (*timeToDieFp)(void), 
+chronos_dequeue_transaction(txn_info_t      *txnInfoP, 
+                            int            (*timeToDieFp)(void), 
                             chronos_queue_t *txnQueueP)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
@@ -128,23 +222,25 @@ cleanup:
   return rc;
 }
 
+/*-------------------------------------------------------------------
+ * Dequeues a request from the 'System Transaction Queue'.
+ *-----------------------------------------------------------------*/
 int
-chronos_dequeue_system_transaction(void *requestP_ret,
-                                   struct timeval *ts, 
-                                   chronosServerContext_t *contextP) 
+chronos_dequeue_system_transaction(void                   *requestP_ret,
+                                   struct timeval         *ts, 
+                                   chronos_queue_t        *systemTxnQueueP)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
   txn_info_t       txn_info;
-  chronos_queue_t *systemTxnQueueP = NULL;
 
-  if (contextP == NULL || requestP_ret == NULL || ts == NULL) {
+  if (requestP_ret == NULL || ts == NULL) {
     server_error("Invalid argument");
     goto failXit;
   }
 
-  systemTxnQueueP = &(contextP->sysTxnQueue);
-
-  rc = chronos_dequeue_transaction(&txn_info, contextP->timeToDieFp, systemTxnQueueP);
+  rc = chronos_dequeue_transaction(&txn_info, 
+                                   systemTxnQueueP->timeToDieFp, 
+                                   systemTxnQueueP);
   if (rc != CHRONOS_SERVER_SUCCESS) {
     server_error("Could not dequeue update transaction");
     goto failXit;
@@ -162,29 +258,32 @@ cleanup:
   return rc;
 }
 
+
+/*-------------------------------------------------------------------
+ * Enqueues a request into the 'System Transaction Queue'.
+ *-----------------------------------------------------------------*/
 int
-chronos_enqueue_system_transaction(void *requestP, 
-                                   struct timeval *ts, 
-                                   chronosServerContext_t *contextP) 
+chronos_enqueue_system_transaction(void                   *requestP, 
+                                   struct timeval         *ts, 
+                                   chronos_queue_t        *systemTxnQueueP)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
   txn_info_t       txn_info;
-  chronos_queue_t *systemTxnQueueP = NULL;
 
-  if (contextP == NULL || requestP == NULL || ts == NULL) {
+  if (requestP == NULL || ts == NULL) {
     server_error("Invalid argument");
     goto failXit;
   }
-
-  systemTxnQueueP = &(contextP->sysTxnQueue);
 
   /* Set the transaction information */
   memset(&txn_info, 0, sizeof(txn_info));
   memcpy(&txn_info.request, requestP, sizeof(txn_info.request));
   txn_info.txn_enqueue = *ts;
 
-  rc = chronos_enqueue_transaction(&txn_info, NULL /* ticket_ret */, 
-                                   contextP->timeToDieFp, systemTxnQueueP);
+  rc = chronos_enqueue_transaction(&txn_info, 
+                                   NULL /* ticket_ret */, 
+                                   systemTxnQueueP->timeToDieFp, 
+                                   systemTxnQueueP);
   if (rc != CHRONOS_SERVER_SUCCESS) {
     server_error("Could not enqueue update transaction");
     goto failXit;
@@ -205,20 +304,19 @@ chronos_dequeue_user_transaction(void                   *requestP_ret,
                                  unsigned long long     *ticket_ret,
                                  volatile int           **txn_done_ret,
                                  volatile int           **txn_rc_ret,
-                                 chronosServerContext_t *contextP) 
+                                 chronos_queue_t         *userTxnQueueP)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
   txn_info_t       txn_info;
-  chronos_queue_t *userTxnQueueP = NULL;
 
-  if (contextP == NULL || ts == NULL) {
+  if (ts == NULL) {
     server_error("Invalid argument");
     goto failXit;
   }
 
-  userTxnQueueP = &(contextP->userTxnQueue);
-
-  rc = chronos_dequeue_transaction(&txn_info, contextP->timeToDieFp, userTxnQueueP);
+  rc = chronos_dequeue_transaction(&txn_info, 
+                                   userTxnQueueP->timeToDieFp, 
+                                   userTxnQueueP);
   if (rc != CHRONOS_SERVER_SUCCESS) {
     server_error("Could not dequeue user transaction");
     goto failXit;
@@ -245,18 +343,15 @@ chronos_enqueue_user_transaction(void *requestP,
                                  unsigned long long *ticket_ret, 
                                  volatile int *txn_done,
                                  volatile int *txn_rc,
-                                 chronosServerContext_t *contextP) 
+                                 chronos_queue_t *userTxnQueueP)
 {
   int              rc = CHRONOS_SERVER_SUCCESS;
   txn_info_t       txn_info;
-  chronos_queue_t *userTxnQueueP = NULL;
 
-  if (contextP == NULL || ts == NULL || ticket_ret == NULL) {
+  if (ts == NULL || ticket_ret == NULL) {
     server_error("Invalid argument");
     goto failXit;
   }
-
-  userTxnQueueP = &(contextP->userTxnQueue);
 
   /* Set the transaction information */
   memset(&txn_info, 0, sizeof(txn_info));
@@ -265,7 +360,10 @@ chronos_enqueue_user_transaction(void *requestP,
   txn_info.txn_done = txn_done;
   txn_info.txn_rc = txn_rc;
 
-  rc = chronos_enqueue_transaction(&txn_info, ticket_ret, contextP->timeToDieFp, userTxnQueueP);
+  rc = chronos_enqueue_transaction(&txn_info, 
+                                   ticket_ret, 
+                                   userTxnQueueP->timeToDieFp, 
+                                   userTxnQueueP);
   if (rc != CHRONOS_SERVER_SUCCESS) {
     server_error("Could not enqueue update transaction");
     goto failXit;
@@ -292,22 +390,14 @@ chronos_queue_size(chronos_queue_t    *txnQueueP)
 }
 
 int
-chronos_system_queue_size(chronosServerContext_t *contextP) 
+chronos_system_queue_size(chronos_queue_t *systemTxnQueueP) 
 {
-  chronos_queue_t *systemTxnQueueP = NULL;
-
-  systemTxnQueueP = &(contextP->sysTxnQueue);
-
   return chronos_queue_size(systemTxnQueueP);
 }
 
 int
-chronos_user_queue_size(chronosServerContext_t *contextP) 
+chronos_user_queue_size(chronos_queue_t *userTxnQueueP)
 {
-  chronos_queue_t *userTxnQueueP = NULL;
-
-  userTxnQueueP = &(contextP->userTxnQueue);
-
   return chronos_queue_size(userTxnQueueP);
 }
 

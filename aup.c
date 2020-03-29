@@ -12,7 +12,18 @@
 #define CHRONOS_AUP_MAGIC_CHECK(_env)       (assert((_env)->magic == CHRONOS_AUP_MAGIC))
 #define CHRONOS_AUP_MAGIC_SET(_env)         ((_env)->magic = CHRONOS_AUP_MAGIC)
 
+#define MIN(a,b)      (a < b ? a : b)
+
+/*---------------------------------------------------------------------------
+ *  This structure holds the timing information of a data object, e.g. 
+ *  update rate, flexible validity interval, etc.
+ *-------------------------------------------------------------------------*/
 typedef struct chronos_aup_data_t {
+  int         data_item_id;               /* Used to map the info in
+                                           * this structure and info
+                                           * in other structures 
+                                           */
+
   float       access_update_rate;
   long long   access_frequency;
   long long   update_frequency;
@@ -26,6 +37,13 @@ typedef struct chronos_aup_data_t {
 } chronos_aup_data_t;
 
 
+/*---------------------------------------------------------------------------
+ *  This is the main structure of this module. 
+ *
+ *  It contains an array of 'data items' that are managed by the module. Each
+ *  element in the array contains timing information, e.g. update rate,
+ *  flexible validity interval, etc.
+ *-------------------------------------------------------------------------*/
 typedef struct chronos_aup_env_t {
   int                        magic;
   float                      beta;
@@ -38,7 +56,6 @@ chronos_aup_env_h *
 chronos_aup_env_alloc(int num_elements, float avi, float beta)
 {
 
-  int              rc = CHRONOS_SERVER_SUCCESS;
   int              i = 0;
   chronos_aup_env_t *envP = NULL;
   chronos_aup_data_t  *dataP = NULL;
@@ -61,6 +78,8 @@ chronos_aup_env_alloc(int num_elements, float avi, float beta)
 
   for (i=0; i<num_elements; i++) {
     dataP = &(envP->data_array[i]);
+
+    dataP->data_item_id = i; /* TODO: Adjust to the propper mapping */
     dataP->absolute_validity_interval = avi;
     dataP->flexible_validity_interval = avi;
     dataP->access_update_rate = 1.0f;
@@ -74,10 +93,9 @@ chronos_aup_env_alloc(int num_elements, float avi, float beta)
   goto cleanup;
 
 failXit:
-  rc = CHRONOS_SERVER_FAIL;
   if (envP != NULL) {
     free(envP);
-    envP == NULL;
+    envP = NULL;
   }
 
 cleanup:
@@ -189,16 +207,23 @@ chronos_aup_reset_all(chronos_aup_env_h *envH)
   return rc;
 }
 
+
+/*--------------------------------------------------
+ * Retrieves a list of n expired data items. 
+ * The provided array is populated with the list.
+ *------------------------------------------------*/
 int
-chronos_aup_get_n_expired(chronos_aup_env_h *envH, int out_array_sz, int *out_array)
+chronos_aup_get_n_expired(chronos_aup_env_h *envH, 
+                          int                out_array_sz, 
+                          int               *out_array)
 {
-  int              rc = CHRONOS_SERVER_SUCCESS;
-  int              i;
-  chronos_aup_env_t *envP = NULL;
-  struct timeval   current_time;
-  long long        current_time_msec;
+  int                  rc = CHRONOS_SERVER_SUCCESS;
+  int                  i;
+  int                  num_found = 0;
+  chronos_aup_env_t   *envP = NULL;
   chronos_aup_data_t  *dataP = NULL;
-  int              num_found = 0;
+  long long            current_time_msec;
+  struct timeval       current_time;
 
   envP = (chronos_aup_env_t *) envH;
   CHRONOS_AUP_MAGIC_CHECK(envP);
@@ -223,7 +248,12 @@ chronos_aup_get_n_expired(chronos_aup_env_h *envH, int out_array_sz, int *out_ar
 }
 
 
-#define MIN(a,b)      (a < b ? a : b)
+/*-----------------------------------------------------
+ * Relaxes the registered 'flexible validity interval'
+ * for a number of data objects. The relaxation
+ * is performed only on the first relax_num_target
+ * cold data items.
+ *----------------------------------------------------*/
 int
 chronos_aup_relax(chronos_aup_env_h *envH, float ds_k)
 {
@@ -261,12 +291,6 @@ chronos_aup_relax(chronos_aup_env_h *envH, float ds_k)
 
   }
 
-  goto cleanup;
-
-failXit:
-  rc = CHRONOS_SERVER_FAIL;
-
-cleanup:
   return rc;
 }
 

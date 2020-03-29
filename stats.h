@@ -1,11 +1,67 @@
 #ifndef STATS_H_
 #define STATS_H_
 
-/* Track response times */
-#define getTime(x) gettimeofday( (x), NULL)
-#define milliSleep(t,x) \
-        ((x).tv_sec=0, (x).tv_usec=(t)*1000, select(0,NULL,NULL,NULL,&(x)))
+#include <chronos_transactions.h>
+#include "server_config.h"
 
+/*------------------------------------------------
+ *      API for time arithmetic
+ *-----------------------------------------------*/
+#define getTime(x) gettimeofday( (x), NULL)
+
+long int 
+diff_time(const struct timeval *start,
+          const struct timeval *end);
+
+long int 
+udiff_time(const struct timeval *start,
+           const struct timeval *end);
+
+
+
+
+/*------------------------------------------------
+ *      API for Thread Stats
+ *----------------------------------------------*/
+typedef struct chronosServerThreadStats_t chronosServerThreadStats_t;
+
+chronosServerThreadStats_t *
+chronosServerThreadStatsAlloc(int num_threads);
+
+void
+update_thread_stats(const struct timeval        *start,
+                    const struct timeval        *end,
+                    long long                    desired_delay_ms,
+                    chronosUserTransaction_t     txn_type,
+                    int                          txn_rc,
+                    int                          thread_num,
+                    chronosServerThreadStats_t  *threadStatsArr);
+
+/*------------------------------------------------
+ *      API for Server Stats
+ *----------------------------------------------*/
+typedef struct chronosServerStats_t chronosServerStats_t;
+
+chronosServerStats_t *
+chronosServerStatsAlloc();
+
+void
+aggregate_thread_stats(int                          num_threads,
+                       chronosServerThreadStats_t  *threadStatsP,
+                       chronosServerStats_t        *serverStatsP,
+                       FILE                        *stats_fp);
+
+long long
+last_xacts_duration_get(chronosServerStats_t  *serverStatsP);
+
+long long
+last_xacts_history_get(chronosServerStats_t  *serverStatsP);
+
+
+/*------------------------------------------------
+ *      API for other type of stats
+ *----------------------------------------------*/
+/* Track response times */
 /* Response time -- this can use a lot of memory */
 #define RTINCR 1000            /* 10 micro second increment */
 #define RTBINS 10000000/RTINCR /* The bins cover the range [0,10000000] us */
@@ -84,11 +140,5 @@ print_stats_to_csv();
 
 int 
 init_stats_struct();
-
-long int 
-diff_time(struct timeval * start,struct timeval *end);
-
-long int 
-udiff_time(struct timeval * start,struct timeval *end);
 
 #endif /* STATS_H_ */
