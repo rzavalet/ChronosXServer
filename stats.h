@@ -2,7 +2,6 @@
 #define STATS_H_
 
 #include <chronos_transactions.h>
-#include "server_config.h"
 
 /*------------------------------------------------
  *      API for time arithmetic
@@ -29,6 +28,9 @@ chronosServerThreadStats_t *
 chronosServerThreadStatsAlloc(int num_threads);
 
 void
+chronosServerThreadStatsFree(chronosServerThreadStats_t *threadStatsArr);
+
+void
 update_thread_stats(const struct timeval        *start,
                     const struct timeval        *end,
                     long long                    desired_delay_ms,
@@ -43,7 +45,10 @@ update_thread_stats(const struct timeval        *start,
 typedef struct chronosServerStats_t chronosServerStats_t;
 
 chronosServerStats_t *
-chronosServerStatsAlloc();
+chronosServerStatsAlloc(long long deadline);
+
+void
+chronosServerStatsFree(chronosServerStats_t * serverStatsP);
 
 void
 aggregate_thread_stats(int                          num_threads,
@@ -52,11 +57,28 @@ aggregate_thread_stats(int                          num_threads,
                        FILE                        *stats_fp);
 
 long long
-last_xacts_duration_get(chronosServerStats_t  *serverStatsP);
+last_user_xacts_duration_get(chronosServerStats_t  *serverStatsP);
 
 long long
-last_xacts_history_get(chronosServerStats_t  *serverStatsP);
+last_user_xacts_delay_get(chronosServerStats_t  *serverStatsP);
 
+long long
+last_user_xacts_slack_get(chronosServerStats_t  *serverStatsP);
+
+long long
+last_user_xacts_history_get(chronosServerStats_t  *serverStatsP);
+
+long long
+last_user_xacts_tpm_get(chronosServerStats_t  *serverStatsP);
+
+long long
+last_user_xacts_ttpm_get(chronosServerStats_t  *serverStatsP);
+
+long long
+total_refresh_xacts_get(chronosServerStats_t  *serverStatsP);
+
+long long
+total_refresh_xacts_duration_get(chronosServerStats_t  *serverStatsP);
 
 /*------------------------------------------------
  *      API for other type of stats

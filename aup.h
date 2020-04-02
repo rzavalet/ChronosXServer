@@ -32,9 +32,23 @@ chronos_aup_data_get(chronos_aup_env_h *envH, int element_idx);
 int
 chronos_aup_data_dump(chronos_aup_env_h *envH, int element_idx);
 
+int
+chronos_aup_data_set_dump(chronos_aup_env_h *envH, int element_idx, int num_elements);
+
 int 
 chronos_aup_reset_all(chronos_aup_env_h *envH);
 
 int
-chronos_aup_get_n_expired(chronos_aup_env_h *envH, int out_array_sz, int *out_array);
+chronos_aup_get_n_expired(chronos_aup_env_h *envH, 
+                          unsigned int       first_element,
+                          unsigned int       num_elements,
+                          int                array_sz, 
+                          int               *array);
+int
+chronos_aup_next_update_set(chronos_aup_env_h *envH, 
+                            int                array_sz, 
+                            int               *array);
+
+float
+chronos_aup_pext_get(chronos_aup_env_h *envH);
 #endif

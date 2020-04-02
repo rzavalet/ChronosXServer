@@ -31,8 +31,6 @@ typedef struct chronos_aup_data_t {
   float       absolute_validity_interval;
   float       beta;
 
-  long long   period;       /* in MS */
-
   long long   time_to_next_update;
 } chronos_aup_data_t;
 
@@ -47,6 +45,7 @@ typedef struct chronos_aup_data_t {
 typedef struct chronos_aup_env_t {
   int                        magic;
   float                      beta;
+  float                      p_ext;
   int                        num_elements;
   chronos_aup_data_t         data_array[1];
 } chronos_aup_env_t;
@@ -75,6 +74,7 @@ chronos_aup_env_alloc(int num_elements, float avi, float beta)
 
   envP->num_elements = num_elements;
   envP->beta = beta;
+  envP->p_ext = 1.0;
 
   for (i=0; i<num_elements; i++) {
     dataP = &(envP->data_array[i]);
@@ -86,8 +86,6 @@ chronos_aup_env_alloc(int num_elements, float avi, float beta)
     dataP->access_frequency = 0;
     dataP->update_frequency = 0;
     dataP->beta = beta;
-
-    dataP->period = 0.5 * dataP->flexible_validity_interval;
   }
 
   goto cleanup;
@@ -214,10 +212,11 @@ chronos_aup_reset_all(chronos_aup_env_h *envH)
  *------------------------------------------------*/
 int
 chronos_aup_get_n_expired(chronos_aup_env_h *envH, 
-                          int                out_array_sz, 
-                          int               *out_array)
+                          unsigned int       first_element,
+                          unsigned int       num_elements,
+                          int                array_sz, 
+                          int               *array)
 {
-  int                  rc = CHRONOS_SERVER_SUCCESS;
   int                  i;
   int                  num_found = 0;
   chronos_aup_env_t   *envP = NULL;
@@ -231,22 +230,54 @@ chronos_aup_get_n_expired(chronos_aup_env_h *envH,
   gettimeofday(&current_time, NULL);
   current_time_msec = current_time.tv_sec * 1000 + current_time.tv_usec/1000;
 
-  for (i=0; i<out_array_sz; i++) {
-    out_array[i] = -1;
+  for (i=0; i<array_sz; i++) {
+    array[i] = -1;
   }
 
-  for (i=0; i<envP->num_elements && num_found < out_array_sz; i++) {
+  for (i=first_element; i<first_element + num_elements && num_found < array_sz; i++) {
     dataP = &(envP->data_array[i]);
 
     if (dataP->time_to_next_update <= current_time_msec) {
-      out_array[num_found] = i;
+      array[num_found] = i;
       num_found ++;
     }
   }
 
-  return rc;
+  return num_found;
 }
 
+
+int
+chronos_aup_next_update_set(chronos_aup_env_h *envH, 
+                            int                array_sz, 
+                            int               *array)
+{
+  int                  rc = CHRONOS_SERVER_SUCCESS;
+  int                  i;
+  int                  data_item;
+  int                  num_found = 0;
+  chronos_aup_env_t   *envP = NULL;
+  chronos_aup_data_t  *dataP = NULL;
+  long long            current_time_msec;
+  struct timeval       current_time;
+
+  envP = (chronos_aup_env_t *) envH;
+  CHRONOS_AUP_MAGIC_CHECK(envP);
+
+  gettimeofday(&current_time, NULL);
+  current_time_msec = current_time.tv_sec * 1000 + current_time.tv_usec/1000;
+
+  for (i=0; i<array_sz; i++) {
+    data_item = array[i];
+
+    if (data_item >= 0) {
+      dataP = &(envP->data_array[data_item]);
+      dataP->time_to_next_update = current_time_msec +  0.5 * dataP->flexible_validity_interval;
+    }
+
+  }
+  return rc;
+}
 
 /*-----------------------------------------------------
  * Relaxes the registered 'flexible validity interval'
@@ -261,7 +292,8 @@ chronos_aup_relax(chronos_aup_env_h *envH, float ds_k)
   int              rc = CHRONOS_SERVER_SUCCESS;
   int              i = 0;
   int              relax_num_target = 0;
-  chronos_aup_env_t *envP = NULL;
+  float            p_ext = 0.0;
+  chronos_aup_env_t   *envP = NULL;
   chronos_aup_data_t  *dataP = NULL;
 
   envP = (chronos_aup_env_t *) envH;
@@ -285,11 +317,18 @@ chronos_aup_relax(chronos_aup_env_h *envH, float ds_k)
       if (avi <= tmp && tmp <= beta * avi) {
         dataP->flexible_validity_interval = tmp;
       }
-
       relax_num_target --;
     }
 
   }
+
+  for (i=0; i < envP->num_elements; i++) {
+    dataP = &(envP->data_array[i]);
+    p_ext += (dataP->flexible_validity_interval / dataP->absolute_validity_interval);
+  }
+
+  envP->p_ext = p_ext / envP->num_elements;
+
 
   return rc;
 }
@@ -334,3 +373,46 @@ chronos_aup_data_dump(chronos_aup_env_h *envH, int element_idx)
 }
 
 
+int
+chronos_aup_data_set_dump(chronos_aup_env_h *envH, int element_idx, int num_elements)
+{
+
+  int i = 0;
+  chronos_aup_env_t *envP = NULL;
+
+  envP = (chronos_aup_env_t *) envH;
+  CHRONOS_AUP_MAGIC_CHECK(envP);
+
+  assert(0 <= element_idx && element_idx < envP->num_elements);
+
+
+  fprintf(stdout, "\n");
+  fprintf(stdout, "=========================================================\n");
+  for (i = element_idx; i < element_idx+num_elements; i++) {
+    if (i > element_idx) {
+      fprintf(stdout, "---------------------------------------------------------\n");
+    }
+    fprintf(stdout, "index                        = %d\n", i);
+    fprintf(stdout, "  access_update_rate         = %.2f\n", envP->data_array[i].access_update_rate);
+    fprintf(stdout, "  access_frequency           = %lld\n", envP->data_array[i].access_frequency);
+    fprintf(stdout, "  update_frequency           = %lld\n", envP->data_array[i].update_frequency);
+    fprintf(stdout, "  flexible_validity_interval = %.2f\n", envP->data_array[i].flexible_validity_interval);
+    fprintf(stdout, "  absolute_validity_interval = %.2f\n", envP->data_array[i].absolute_validity_interval);
+    fprintf(stdout, "  beta                       = %.2f\n", envP->data_array[i].beta);
+    fprintf(stdout, "  time_to_next_update        = %lld\n", envP->data_array[i].time_to_next_update);
+  }
+  fprintf(stdout, "=========================================================\n");
+  return CHRONOS_SERVER_SUCCESS;
+}
+
+float
+chronos_aup_pext_get(chronos_aup_env_h *envH)
+{
+
+  chronos_aup_env_t *envP = NULL;
+
+  envP = (chronos_aup_env_t *) envH;
+  CHRONOS_AUP_MAGIC_CHECK(envP);
+
+  return envP->p_ext;
+}

@@ -55,14 +55,7 @@
 /* Chronos server has two ready queues. The default size of them is 1024 */
 #define CHRONOS_READY_QUEUE_SIZE     (1024)
 
-/* The update period is initially set to 0.5 in Chronos
- */
-#define CHRONOS_INITIAL_VALIDITY_INTERVAL_MS  100
-
-/* By default, Chronos uses \beta=2
- */
-#define CHRONOS_UPDATE_PERIOD_RELAXATION_BOUND  2
-
+#define CHRONOS_INITIAL_VALIDITY_INTERVAL_MS  1000
 
 #define CHRONOS_DESIRED_DELAY_BOUND_MS          500
 
@@ -70,8 +63,7 @@
 /* The sampling in Chronos is done every 30 seconds
  */
 #define CHRONOS_SAMPLING_PERIOD_SEC     (30)
-#define CHRONOS_SAMPLING_SLOTS          (60 / 2)
-#define CHRONOS_SAMPLES_PER_MINUTE      (60 / CHRONOS_SAMPLING_PERIOD_SEC)
+#define CHRONOS_SAMPLING_SLOTS          (60 / CHRONOS_SAMPLING_PERIOD_SEC)
 
 /* Chronos experiments take 15 minutes
  */
@@ -81,8 +73,10 @@
 #else
 #define CHRONOS_EXPERIMENT_DURATION_SEC (CHRONOS_MIN_TO_S(15))
 #endif
+#define CHRONOS_WARMUP_DURATION_SEC     (CHRONOS_MIN_TO_S(1))
 
 #define CHRONOS_ALPHA                  (0.4)
+#define CHRONOS_BETA                   (2.0)
 
 /* In the Chronos paper, the number of client threads start
  * at 900 and it can increase up to 1800

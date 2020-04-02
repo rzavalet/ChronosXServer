@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "common.h"
+#include "server_config.h"
 #include "stats.h"
 
 #define CHRONOS_TXN_TYPES     5
@@ -36,12 +38,18 @@ typedef struct chronosServerThreadStats_t
 typedef struct chronosServerStats_t 
 {
   int            sample_num;
-  long long      xacts_history[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_duration[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_tpm[60 / SAMPLES_PER_MINUTE];
-  long long      xacts_timely[60 / SAMPLES_PER_MINUTE];
-  //long long      xacts_duration[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
-  //long long      xacts_tpm[CHRONOS_TXN_TYPES][60 / SAMPLES_PER_MINUTE];
+  long long      deadline;
+
+  long long      user_xacts_history[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_timely[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_duration[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_slack[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_delay[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_tpm[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_ttpm[CHRONOS_SAMPLING_SLOTS];
+
+  long long      refresh_xacts_history[CHRONOS_SAMPLING_SLOTS];
+  long long      refresh_xacts_duration[CHRONOS_SAMPLING_SLOTS];
 } chronosServerStats_t;
 
 
@@ -75,6 +83,14 @@ chronosServerThreadStats_t *
 chronosServerThreadStatsAlloc(int num_threads)
 {
   return calloc(num_threads, sizeof(chronosServerThreadStats_t));
+}
+
+void
+chronosServerThreadStatsFree(chronosServerThreadStats_t *threadStatsArr)
+{
+  if (threadStatsArr != NULL) {
+    free(threadStatsArr);
+  }
 }
 
 void
@@ -116,24 +132,89 @@ update_thread_stats(const struct timeval        *start,
  *      API for Server Stats
  *----------------------------------------------*/
 chronosServerStats_t *
-chronosServerStatsAlloc()
+chronosServerStatsAlloc(long long deadline)
 {
-  return calloc(1, sizeof(chronosServerStats_t));
+  chronosServerStats_t *serverStatsP = NULL;
+
+  serverStatsP = calloc(1, sizeof(chronosServerStats_t));
+  if (serverStatsP == NULL) {
+    goto failXit;
+  }
+
+  serverStatsP->deadline = deadline;
+
+  goto cleanup;
+
+failXit:
+  serverStatsP = NULL;
+
+cleanup:
+  return serverStatsP;
 }
 
-
-long long
-last_xacts_duration_get(chronosServerStats_t  *serverStatsP)
+void
+chronosServerStatsFree(chronosServerStats_t * serverStatsP)
 {
-  int sample_num = serverStatsP->sample_num;
-  return serverStatsP->xacts_duration[sample_num];
+  if (serverStatsP != NULL) {
+    memset(serverStatsP, 0, sizeof(*serverStatsP));
+    free(serverStatsP);
+  }
 }
 
 long long
-last_xacts_history_get(chronosServerStats_t  *serverStatsP)
+last_user_xacts_duration_get(chronosServerStats_t  *serverStatsP)
 {
   int sample_num = serverStatsP->sample_num;
-  return serverStatsP->xacts_history[sample_num];
+  return serverStatsP->user_xacts_duration[sample_num];
+}
+
+long long
+last_user_xacts_delay_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->user_xacts_delay[sample_num];
+}
+
+long long
+last_user_xacts_slack_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->user_xacts_slack[sample_num];
+}
+
+long long
+last_user_xacts_history_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->user_xacts_history[sample_num];
+}
+
+long long
+last_user_xacts_tpm_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->user_xacts_tpm[sample_num];
+}
+
+long long
+last_user_xacts_ttpm_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->user_xacts_ttpm[sample_num];
+}
+
+long long
+total_refresh_xacts_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->refresh_xacts_history[sample_num];
+}
+
+long long
+total_refresh_xacts_duration_get(chronosServerStats_t  *serverStatsP)
+{
+  int sample_num = serverStatsP->sample_num;
+  return serverStatsP->refresh_xacts_duration[sample_num];
 }
 
 /*-------------------------------------------------
@@ -148,64 +229,81 @@ aggregate_thread_stats(int                          num_threads,
 {
   int i, j;
   int sample_num = 0;
-  long long total_xacts = 0;
-  long long total_duration = 0;
-  long long max_duration = 0;
   long long old_count = 0;
   long long old_timely = 0;
 
-  long long timely_xacts = 0;
-  long long user_timely_xacts = 0;
-  long long total_update_xacts = 0;
-  long long total_update_duration = 0;
+  long long total_user_xacts = 0;
+  long long total_duration_user_xacts = 0;
+  long long total_delay_user_xacts = 0;
+  long long total_slack_user_xacts = 0;
+  long long timely_user_xacts = 0;
+  long long max_duration_user_xacts = 0;
+
+  long long timely_refresh_xacts = 0;
+  long long total_refresh_xacts = 0;
+  long long total_duration_refresh_xacts = 0;
 
   for (j=0; j<num_threads; j++) {
 
+    /* User xacts */
     for (i=0; i<CHRONOS_TXN_TYPES-1; i++) {
-      total_xacts += threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_SUCCESS]
+      timely_user_xacts += threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_TIMELY];
+
+      total_user_xacts += threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_SUCCESS]
                       + threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_FAILED];
 
-      user_timely_xacts += threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_TIMELY];
+      total_duration_user_xacts += threadStatsArr[j].xacts_duration[i];
 
-      total_duration += threadStatsArr[j].xacts_duration[i];
+      if (threadStatsArr[j].xacts_duration[i] > serverStatsP->deadline) {
+        total_delay_user_xacts += threadStatsArr[j].xacts_duration[i] - serverStatsP->deadline;
+      }
+      else {
+        total_slack_user_xacts += serverStatsP->deadline - threadStatsArr[j].xacts_duration[i];
+      }
 
-      if (threadStatsArr[j].xacts_max_time[i] > max_duration) {
-        max_duration = threadStatsArr[j].xacts_max_time[i];
+      if (threadStatsArr[j].xacts_max_time[i] > max_duration_user_xacts) {
+        max_duration_user_xacts = threadStatsArr[j].xacts_max_time[i];
       }
     }
 
 
-    /* Stats for the update transactions */
-    timely_xacts += threadStatsArr[j].xacts_executed[CHRONOS_SYS_TXN_UPDATE_STOCK][CHRONOS_XACT_TIMELY];
-    total_update_xacts += threadStatsArr[j].xacts_executed[CHRONOS_SYS_TXN_UPDATE_STOCK][CHRONOS_XACT_SUCCESS]
+    /* Stats for the refresh xacts */
+    timely_refresh_xacts += threadStatsArr[j].xacts_executed[CHRONOS_SYS_TXN_UPDATE_STOCK][CHRONOS_XACT_TIMELY];
+
+    total_refresh_xacts += threadStatsArr[j].xacts_executed[CHRONOS_SYS_TXN_UPDATE_STOCK][CHRONOS_XACT_SUCCESS]
                           + threadStatsArr[j].xacts_executed[CHRONOS_SYS_TXN_UPDATE_STOCK][CHRONOS_XACT_FAILED];
-    total_update_duration += threadStatsArr[j].xacts_duration[CHRONOS_SYS_TXN_UPDATE_STOCK];
+
+    total_duration_refresh_xacts += threadStatsArr[j].xacts_duration[CHRONOS_SYS_TXN_UPDATE_STOCK];
   }
 
   
-  serverStatsP->sample_num = (serverStatsP->sample_num + 1) % (60 / SAMPLES_PER_MINUTE);
+  serverStatsP->sample_num = (serverStatsP->sample_num + 1) % CHRONOS_SAMPLING_SLOTS;
   sample_num = serverStatsP->sample_num;
 
-  old_count = serverStatsP->xacts_history[sample_num];
-  old_timely = serverStatsP->xacts_timely[sample_num];
+  old_count = serverStatsP->user_xacts_history[sample_num];
+  old_timely = serverStatsP->user_xacts_timely[sample_num];
 
-  serverStatsP->xacts_history[sample_num] = total_xacts;
-  serverStatsP->xacts_duration[sample_num] = total_duration;
+  /* These are the cumulative xacts */
+  serverStatsP->user_xacts_history[sample_num] = total_user_xacts;
+  serverStatsP->user_xacts_timely[sample_num] = timely_user_xacts;
+  serverStatsP->user_xacts_duration[sample_num] = total_duration_user_xacts;
+  serverStatsP->user_xacts_delay[sample_num] = total_delay_user_xacts;
+  serverStatsP->user_xacts_slack[sample_num] = total_slack_user_xacts;
 
-  serverStatsP->xacts_tpm[sample_num] = total_xacts - old_count;
-  //serverStatsP->xacts_timely[sample_num] = timely_xacts - old_timely;
-  serverStatsP->xacts_timely[sample_num] = user_timely_xacts - old_timely;
+  serverStatsP->refresh_xacts_history[sample_num] = total_refresh_xacts;
+  serverStatsP->refresh_xacts_duration[sample_num] = total_duration_refresh_xacts;
 
-  if (stats_fp != NULL) {
-    fprintf(stats_fp, 
-            "%lld, %lld, %lld, %lld, %lld, %lld\n",
-            serverStatsP->xacts_history[sample_num],
-            serverStatsP->xacts_duration[sample_num],
-            serverStatsP->xacts_tpm[sample_num],
-            serverStatsP->xacts_timely[sample_num],
-            total_update_xacts, total_update_duration);
-    fflush(stats_fp);
-  }
+  /* These are the per minute xacts 
+   * total_user_xacts: contains the cumulative number of total user
+   *                   transactions (failed + successful) 
+   * old_count: contains the cumulative number of total user transactions
+   *            (failed + successful) up to one minute ago.
+   * 
+   * So, total_user_xacts - old_count is the number of transactions executed
+   * in the last minute.
+   */
+  serverStatsP->user_xacts_tpm[sample_num] = total_user_xacts - old_count;
+  serverStatsP->user_xacts_ttpm[sample_num] = timely_user_xacts - old_timely;
 
   return;
 }

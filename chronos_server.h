@@ -14,6 +14,7 @@
 #include "aup.h"
 #include "stats.h"
 #include "chronos_queue.h"
+#include "chronos_ac.h"
 
 
 
@@ -82,10 +83,6 @@ typedef struct chronosServerContext_t
    * this is the initial value. */
   long long initialValidityIntervalMS;
 
-  /* Each data item is refreshed in a certain interval.
-   * This update period is related to the validityIntervalms */
-  double updatePeriodMS;
-
   /* This is the "deadline" for the user txns */
   long long desiredDelayBoundMS;
 
@@ -94,6 +91,7 @@ typedef struct chronosServerContext_t
   chronos_queue_t *sysTxnQueue;
 
   /*============ These fields control the sampling task ==========*/
+  FILE                        *stats_fp;
   chronosServerStats_t        *performanceStatsP;
   chronosServerThreadStats_t  *threadStatsArr;
 
@@ -102,9 +100,7 @@ typedef struct chronosServerContext_t
   double                smoth_degree_timing_violation;
   double                alpha;
 
-  volatile int          num_txn_to_wait;
-  int                   total_txns_enqueued;
-
+  chronos_ac_env_t     *ac_env; 
   chronos_aup_env_h    *aup_env;
   /*==============================================================*/
 
@@ -114,24 +110,14 @@ typedef struct chronosServerContext_t
   
 } chronosServerContext_t;
 
-typedef struct chronosUpdateThreadInfo_t {
-  int    num_stocks;       /* How many stocks should the thread handle */
-} chronosUpdateThreadInfo_t;
-
 typedef struct chronosServerThreadInfo_t {
   int       magic;
   pthread_t thread_id;
   int       thread_num;
-  int       first_symbol_id;
   int       socket_fd;
   chronosServerThreadState_t state;
   chronosServerThreadType_t thread_type;
   chronosServerContext_t *contextP;
-
-  /* These are fields specific to each thread type */
-  union {
-    chronosUpdateThreadInfo_t updateParameters;
-  } parameters;
 } chronosServerThreadInfo_t;
 
 #endif
