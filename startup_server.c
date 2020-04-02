@@ -1691,6 +1691,9 @@ updateThread(void *argP)
   int    rc = CHRONOS_SERVER_SUCCESS;
   int    first_symbol = 0;
   int    num_updates = 0;
+  int    update_list[CHRONOS_NUM_STOCK_UPDATES_PER_UPDATE_THREAD];
+  int    num_elements;
+  int    i;
   struct timeval current_time;
   struct timeval timeout;
   chronosServerThreadInfo_t *infoP = (chronosServerThreadInfo_t *) argP;
@@ -1698,9 +1701,9 @@ updateThread(void *argP)
   CHRONOS_CACHE_H chronosCacheH = NULL;
   CHRONOS_CLIENT_CACHE_H  clientCacheH = NULL;
   CHRONOS_REQUEST_H requestH = NULL;
+
   pthread_t tid = pthread_self();
   double update_period = 0;
-  int *data_items_to_update = NULL;
 
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
@@ -1713,6 +1716,11 @@ updateThread(void *argP)
   num_updates = infoP->contextP->numUpdatesPerUpdateThread;
   assert(num_updates > 0);
   first_symbol = infoP->thread_num * serverContextP->numUpdatesPerUpdateThread;
+
+  num_elements = num_updates;
+  for (i=0; i<num_updates; i++) {
+    update_list[i] = i + first_symbol;
+  }
 
   /* Create a chronos environment which holds a cache
    * of the users and symbols managed by the system
@@ -1749,9 +1757,6 @@ updateThread(void *argP)
     goto cleanup;
   }
 
-  data_items_to_update = calloc(num_updates, sizeof(int));
-  assert(data_items_to_update);
-
   update_period = 0.5 * infoP->contextP->initialValidityIntervalMS;
 
   while (1) {
@@ -1773,9 +1778,6 @@ updateThread(void *argP)
      *-------------------------------------------------*/
     if (IS_CHRONOS_MODE_FULL(infoP->contextP) || IS_CHRONOS_MODE_AUP(infoP->contextP)) 
     {
-      int update_list[CHRONOS_NUM_STOCK_UPDATES_PER_UPDATE_THREAD];
-      int num_elements;
-
       num_elements = chronos_aup_get_n_expired(infoP->contextP->aup_env, 
                                      first_symbol,
                                      num_updates,
@@ -1799,10 +1801,16 @@ updateThread(void *argP)
     }
     else 
     {
+      requestH = chronosRequestUpdateFromListCreate(num_elements,
+                                                    update_list, 
+                                                    clientCacheH, 
+                                                    chronosEnvH);
+#if 0
       requestH = chronosRequestCreate(num_updates,
                                       CHRONOS_SYS_TXN_UPDATE_STOCK,
                                       clientCacheH, 
                                       chronosEnvH);
+#endif
 #if 0
       (void) chronosRequestDump(requestH);
 #endif
