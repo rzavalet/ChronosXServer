@@ -89,4 +89,31 @@
 
 #define CHRONOS_TCP_QUEUE   1024
 
+/*--------------------------------------------------------------
+ * Litmus RT constants:
+ *------------------------------------------------------------*/
+#define UPDATE_THREAD_EXEC_COST           ms2ns(5)
+#define UPDATE_THREAD_PERIOD              ms2ns(500)
+#define UPDATE_THREAD_RELATIVE_DEADLINE   ms2ns(5)
+#define UPDATE_THREAD_PHASE               ms2ns(5)
+#define UPDATE_THREAD_MAJOR_CYCLE         ms2ns(500)
+#define UPDATE_THREAD_CORE                (0)
+
+#define CLIENT_THREAD_EXEC_COST           ms2ns(50)
+#define CLIENT_THREAD_PERIOD              ms2ns(50)
+#define CLIENT_THREAD_RELATIVE_DEADLINE   ms2ns(50)
+#define CLIENT_THREAD_CORE                (1)
+
+#define PROCESS_THREAD_EXEC_COST           ms2ns(50)
+#define PROCESS_THREAD_PERIOD              ms2ns(50)
+#define PROCESS_THREAD_RELATIVE_DEADLINE   ms2ns(50)
+#define PROCESS_THREAD_CORE                (2)
+
+#define TIMER_THREAD_EXEC_COST           ms2ns(1000)
+#define TIMER_THREAD_PERIOD              ms2ns(30000)
+#define TIMER_THREAD_RELATIVE_DEADLINE   ms2ns(1000)
+#define TIMER_THREAD_PHASE               ms2ns(0)
+#define TIMER_THREAD_MAJOR_CYCLE         ms2ns(30000)
+#define TIMER_THREAD_CORE                (3)
+
 #endif /* SERVER_CONFIG_H_ */

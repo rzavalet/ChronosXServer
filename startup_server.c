@@ -16,6 +16,10 @@
 #include <netinet/in.h>
 #include <poll.h>
 
+#ifdef LITMUS_RT
+#include <litmus.h>
+#endif
+
 #include <chronos_packets.h>
 #include <chronos_transactions.h>
 #include <chronos_environment.h>
@@ -151,7 +155,7 @@ processUserTransaction(volatile int *txn_rc,
  *-------------------------------------------------------------*/
 volatile int              sample_num = -1;
 volatile int              num_started_server_threads = 0;
-volatile int              warming_up = 1;
+volatile int              warming_up = 0;
 volatile int              time_to_die = 0;
 chronosServerContext_t    *serverContextP = NULL;
 chronosServerThreadInfo_t *samplingThreadInfoP = NULL;
@@ -185,7 +189,7 @@ stats_open_file(chronosServerContext_t *contextP)
   contextP->stats_fp = stats_fp;
 
   fprintf(contextP->stats_fp, 
-          "count,duration,slack,delay,tpm,ttpm,update_xacts,update_duration,average_service_delay_ms,degree_timing_violation,smoth_degree_timing_violation,p_ext\n");
+          "count,duration,slack,delay,tpm,ttpm,update_xacts,update_duration,average_service_delay_ms,degree_timing_violation,smoth_degree_timing_violation,p_ext,sys_queue_size,user_queue_size\n");
 
   goto cleanup;
 
@@ -249,7 +253,7 @@ stats_print(chronosServerContext_t *contextP)
 
   if (contextP->stats_fp != NULL) {
     fprintf(contextP->stats_fp, 
-            "%lld, %lld, %lld, %lld, %lld, %lld, %lld, %lld, %.2lf, %.2lf, %.2lf, %.2f\n",
+            "%lld, %lld, %lld, %lld, %lld, %lld, %lld, %lld, %.2lf, %.2lf, %.2lf, %.2f, %d, %d\n",
             last_user_xacts_history,
             last_user_xacts_duration,
             last_user_xacts_slack,
@@ -261,7 +265,9 @@ stats_print(chronosServerContext_t *contextP)
             contextP->average_service_delay_ms,
             contextP->degree_timing_violation,
             contextP->smoth_degree_timing_violation,
-            p_ext);
+            p_ext,
+            chronos_queue_size(contextP->sysTxnQueue),
+            chronos_queue_size(contextP->userTxnQueue));
 
     fflush(contextP->stats_fp);
   }
@@ -475,6 +481,17 @@ int main(int argc, char *argv[])
   }
 
 
+#ifdef LITMUS_RT
+  /*----------------------------------------------------
+   * Litmus RT initialization
+   *--------------------------------------------------*/
+  rc = init_litmus();
+  if (rc != 0) {
+    server_error("failed to init litmus environment");
+    goto failXit;
+  }
+#endif
+
   /*=====================================================================
    * Spawn each of the required threads
    *===================================================================*/
@@ -581,6 +598,7 @@ int main(int argc, char *argv[])
 #endif
 
 
+#if 0
   /*------------------------------------------------------------------------
    * Spawn sampling thread
    *------------------------------------------------------------------------*/
@@ -606,6 +624,7 @@ int main(int argc, char *argv[])
   }
 
   server_debug(2,"Spawned sampling thread");
+#endif
 
   /* ===================================================================
    *
@@ -646,6 +665,10 @@ failXit:
   rc = CHRONOS_SERVER_FAIL;
   
 cleanup:
+
+#ifdef LITMUS_RT
+  exit_litmus();
+#endif
 
   if (serverContextP) {
     chronos_queue_free(serverContextP->userTxnQueue);
@@ -916,6 +939,16 @@ processArguments(int argc, char *argv[], chronosServerContext_t *contextP)
     server_debug(2, "*** Evaluating transaction: %s", chronos_user_transaction_str[serverContextP->evaluated_txn]);
   }
 
+#ifdef LITMUS_RT
+  if (contextP->runningMode == CHRONOS_SERVER_XACT_EVALUATION_MODE
+      || contextP->runningMode == CHRONOS_SERVER_MODE_AC
+      || contextP->runningMode == CHRONOS_SERVER_MODE_AUP
+      || contextP->runningMode == CHRONOS_SERVER_MODE_AC_AUP) {
+    server_error("Could not use this mode when running in Litmus Mode");
+    goto failXit;
+  }
+#endif
+
   return CHRONOS_SERVER_SUCCESS;
 
 failXit:
@@ -995,10 +1028,58 @@ daHandler(void *argP)
   chronosRequestPacket_t reqPacket;
   pthread_t tid = pthread_self();
 
+#ifdef LITMUS_RT
+  int rc = CHRONOS_SERVER_SUCCESS;
+  struct rt_task params;
+#endif
+
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
     goto cleanup;
   }
+
+#ifdef LITMUS_RT
+  rc = init_rt_thread();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to initialize litmus thread");
+    goto cleanup;
+  }
+
+	memset(&params, 0, sizeof(params));
+
+	init_rt_task_param(&params);
+  params.exec_cost = CLIENT_THREAD_EXEC_COST;
+  params.period = CLIENT_THREAD_PERIOD;
+  params.relative_deadline = CLIENT_THREAD_RELATIVE_DEADLINE;
+  params.cpu = 1001;
+
+  rc = set_rt_task_param(gettid(), &params);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set real time parameters");
+    goto cleanup;
+  }
+
+  rc = be_migrate_to_domain(CLIENT_THREAD_CORE);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to migrate to rid");
+    goto cleanup;
+  }
+
+  rc = task_mode(LITMUS_RT_TASK);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set litmus task model");
+    goto cleanup;
+  }
+
+  server_info("Waiting for synchronous release....");
+  server_info("RZ_DEBUG: exec_cost: %llu, period: %llu, deadlile: %llu, cpu: %u",
+              params.exec_cost, params.period, params.relative_deadline, params.cpu);
+  rc = wait_for_ts_release();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to release real-time task");
+    goto cleanup;
+  }
+#endif
 
   while (!time_to_die) {
     CHRONOS_SERVER_THREAD_CHECK(infoP);
@@ -1085,6 +1166,10 @@ daHandler(void *argP)
   }
 
 cleanup:
+
+#ifdef LITMUS_RT
+  task_mode(BACKGROUND_TASK);
+#endif
 
   close(infoP->socket_fd);
 
@@ -1554,13 +1639,18 @@ processThread(void *argP)
   volatile int          *txn_doneP = NULL;
   volatile int          *txn_rcP = NULL;
   long int              elapsed_experiment_time;
+  long int              elapsed_since_last_sample;
   struct timeval        start_experiment_time;
+  struct timeval        previous_sample;
   struct timeval        current_time;
   int current_rep = 0;
   int size_user_queue = 0;
   int size_sys_queue = 0;
   int rc;
   pthread_t tid = pthread_self();
+#ifdef LITMUS_RT
+  struct rt_task params;
+#endif
   
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
@@ -1574,12 +1664,56 @@ processThread(void *argP)
   pthread_cond_signal(&serverContextP->startThreadsWait);
 
   total_experiment_duration = 1000 * (infoP->contextP->duration_sec + CHRONOS_WARMUP_DURATION_SEC);
-#if 0
   warmup_duration = 1000 * CHRONOS_WARMUP_DURATION_SEC;
+
+#ifdef LITMUS_RT
+  rc = init_rt_thread();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to initialize litmus thread");
+    goto cleanup;
+  }
+
+	memset(&params, 0, sizeof(params));
+
+	init_rt_task_param(&params);
+  params.exec_cost = PROCESS_THREAD_EXEC_COST;
+  params.period = PROCESS_THREAD_PERIOD;
+  params.relative_deadline = PROCESS_THREAD_RELATIVE_DEADLINE;
+  params.cpu = 1001;
+
+  rc = set_rt_task_param(gettid(), &params);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set real time parameters");
+    goto cleanup;
+  }
+
+  rc = be_migrate_to_domain(PROCESS_THREAD_CORE);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to migrate to rid");
+    goto cleanup;
+  }
+
+  rc = task_mode(LITMUS_RT_TASK);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set litmus task model");
+    goto cleanup;
+  }
+
+  server_info("RZ_DEBUG: exec_cost: %llu, period: %llu, deadlile: %llu, cpu: %u",
+              params.exec_cost, params.period, params.relative_deadline, params.cpu);
+
+#if 0
+  server_info("Waiting for synchronous release....");
+  rc = wait_for_ts_release();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to release real-time task");
+    goto cleanup;
+  }
 #endif
-  warmup_duration = 0;
+#endif
 
   getTime(&start_experiment_time);
+  getTime(&previous_sample);
 
   /* Give update transactions more priority */
   /* TODO: Add scheduling technique */
@@ -1589,7 +1723,9 @@ processThread(void *argP)
     CHRONOS_SERVER_CTX_CHECK(infoP->contextP);
 
 #ifdef CHRONOS_UPDATE_TRANSACTIONS_ENABLED
-    while(chronos_queue_size(infoP->contextP->sysTxnQueue) > 0) {
+    int num_txn_to_dequeue = chronos_queue_size(infoP->contextP->sysTxnQueue);
+
+    if (num_txn_to_dequeue > 0) {
       /*-------- Process refresh transaction ----------*/
       current_rep ++;
 
@@ -1603,6 +1739,7 @@ processThread(void *argP)
 
       CHRONOS_REQUEST_MAGIC_CHECK(&receivedRequest);
 
+      //server_info("%lu: (refresh xact) Processing ticket: %d", tid, 0);
       rc = processRefreshTransaction(&receivedRequest, received_time, infoP);
       if (rc != CHRONOS_SERVER_SUCCESS) {
         server_error("Failed to execute refresh transactions");
@@ -1639,7 +1776,7 @@ processThread(void *argP)
 
       CHRONOS_REQUEST_MAGIC_CHECK(&receivedRequest);
 
-      server_info("%lu: Processing ticket: %llu", tid, ticket);
+      //server_info("%lu: (user xact) Processing ticket: %llu", tid, ticket);
       if (processUserTransaction(txn_rcP, 
                                  &receivedRequest, 
                                  received_time, 
@@ -1673,6 +1810,17 @@ processThread(void *argP)
       time_to_die = 1;
       break;
     }
+
+    elapsed_since_last_sample = diff_time(&previous_sample, &current_time);
+    if (elapsed_since_last_sample > 1000 * CHRONOS_SAMPLING_PERIOD_SEC) {
+      aggregateStats(serverContextP);
+      performanceMonitor(serverContextP);
+      qosManager(serverContextP);
+      adaptive_update_policy(serverContextP);
+
+      stats_print(serverContextP);
+      previous_sample = current_time;
+    }
   }
   
 cleanup:
@@ -1704,6 +1852,15 @@ updateThread(void *argP)
 
   pthread_t tid = pthread_self();
   double update_period = 0;
+  unsigned long warmup_duration = 60;
+
+#ifdef LITMUS_RT
+  lt_t cycle_length;
+  lt_t slot_offset;
+  lt_t now;
+  lt_t next_cycle_start;
+  struct rt_task params;
+#endif
 
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
@@ -1759,10 +1916,66 @@ updateThread(void *argP)
 
   update_period = 0.5 * infoP->contextP->initialValidityIntervalMS;
 
+  sleep(warmup_duration);
+
+#ifdef LITMUS_RT
+  rc = init_rt_thread();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to initialize litmus thread");
+    goto cleanup;
+  }
+
+	memset(&params, 0, sizeof(params));
+
+	init_rt_task_param(&params);
+  params.exec_cost = UPDATE_THREAD_EXEC_COST;
+  params.period = UPDATE_THREAD_PERIOD;
+  params.relative_deadline = UPDATE_THREAD_RELATIVE_DEADLINE;
+  params.cpu = ((1 + UPDATE_THREAD_CORE) * 1000) + infoP->thread_num;
+	params.phase = UPDATE_THREAD_PHASE * infoP->thread_num;
+
+  cycle_length = UPDATE_THREAD_MAJOR_CYCLE;
+  slot_offset = params.phase;
+
+  rc = set_rt_task_param(gettid(), &params);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set real time parameters");
+    goto cleanup;
+  }
+
+  rc = be_migrate_to_domain(UPDATE_THREAD_CORE);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to migrate to rid");
+    goto cleanup;
+  }
+
+  rc = task_mode(LITMUS_RT_TASK);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set litmus task model");
+    goto cleanup;
+  }
+
+  server_info("Waiting for synchronous release....");
+  server_info("RZ_DEBUG: exec_cost: %llu, period: %llu, deadlile: %llu, cpu: %u, phase: %llu, cycle: %llu, offset: %llu",
+              params.exec_cost, params.period, params.relative_deadline, params.cpu,
+              params.phase, cycle_length, slot_offset);
+  rc = wait_for_ts_release();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to release real-time task");
+    goto cleanup;
+  }
+#endif
+
   while (1) {
     CHRONOS_SERVER_THREAD_CHECK(infoP);
     CHRONOS_SERVER_CTX_CHECK(infoP->contextP);
 
+
+#ifdef LITMUS_RT
+    now = litmus_clock();
+    next_cycle_start = ((now / cycle_length) + 1) * cycle_length;
+    lt_sleep_until(next_cycle_start + slot_offset);
+#endif
 
     server_debug(3, "%lu: --- Starting new cycle (thread %d) ---", 
                 tid, infoP->thread_num);
@@ -1787,7 +2000,7 @@ updateThread(void *argP)
         goto nothingToDo;
       }
 
-      server_error("Creating request with %d elements", num_elements);
+      //server_info("Creating request with %d elements", num_elements);
       requestH = chronosRequestUpdateFromListCreate(num_elements,
                                                     update_list, 
                                                     clientCacheH, 
@@ -1840,6 +2053,7 @@ updateThread(void *argP)
 #endif
 
 nothingToDo:
+#ifndef LITMUS_RT
     if (IS_CHRONOS_MODE_FULL(infoP->contextP) || IS_CHRONOS_MODE_AUP(infoP->contextP)) {
       milliSleep(50, timeout);
     }
@@ -1848,6 +2062,7 @@ nothingToDo:
         goto cleanup;
       }
     }
+#endif
 
 
     if (time_to_die == 1) {
@@ -1858,6 +2073,10 @@ nothingToDo:
 
 cleanup:
  
+#ifdef LITMUS_RT
+  task_mode(BACKGROUND_TASK);
+#endif
+
   if (clientCacheH != NULL) {
     chronosClientCacheFree(clientCacheH);
     clientCacheH = NULL;
@@ -1879,6 +2098,15 @@ samplingThread(void *argP)
   struct timeval timeout;
   pthread_t tid = pthread_self();
   chronosServerContext_t *serverContextP = NULL;
+  int rc = CHRONOS_SERVER_SUCCESS;
+
+#ifdef LITMUS_RT
+  lt_t cycle_length;
+  lt_t slot_offset;
+  lt_t now;
+  lt_t next_cycle_start;
+  struct rt_task params;
+#endif
 
   if (infoP == NULL || infoP->contextP == NULL) {
     server_error("Invalid argument");
@@ -1903,8 +2131,63 @@ samplingThread(void *argP)
     milliSleep(1000, timeout);
   }
 
+#ifdef LITMUS_RT
+  rc = init_rt_thread();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to initialize litmus thread");
+    goto cleanup;
+  }
+
+	memset(&params, 0, sizeof(params));
+
+	init_rt_task_param(&params);
+  params.exec_cost = TIMER_THREAD_EXEC_COST;
+  params.period = TIMER_THREAD_PERIOD;
+  params.relative_deadline = TIMER_THREAD_RELATIVE_DEADLINE;
+  params.cpu = 1001;
+	params.phase = TIMER_THREAD_PHASE;
+
+  cycle_length = TIMER_THREAD_MAJOR_CYCLE;
+  slot_offset = params.phase;
+
+  rc = set_rt_task_param(gettid(), &params);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set real time parameters");
+    goto cleanup;
+  }
+
+  rc = be_migrate_to_domain(TIMER_THREAD_CORE);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to migrate to rid");
+    goto cleanup;
+  }
+
+  rc = task_mode(LITMUS_RT_TASK);
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to set litmus task model");
+    goto cleanup;
+  }
+
+  server_info("Waiting for synchronous release....");
+  server_info("RZ_DEBUG: exec_cost: %llu, period: %llu, deadlile: %llu, cpu: %u, phase: %llu, cycle: %llu, offset: %llu",
+              params.exec_cost, params.period, params.relative_deadline, params.cpu,
+              params.phase, cycle_length, slot_offset);
+  rc = wait_for_ts_release();
+  if (rc != CHRONOS_SERVER_SUCCESS) {
+    server_error("Failed to release real-time task");
+    goto cleanup;
+  }
+#endif
+
   while (1) {
+
+#ifndef LITMUS_RT
     milliSleep(1000 * CHRONOS_SAMPLING_PERIOD_SEC, timeout);
+#else
+    now = litmus_clock();
+    next_cycle_start = ((now / cycle_length) + 1) * cycle_length;
+    lt_sleep_until(next_cycle_start + slot_offset);
+#endif
 
     aggregateStats(serverContextP);
     performanceMonitor(serverContextP);
@@ -1920,6 +2203,9 @@ samplingThread(void *argP)
   }
 
 cleanup:
+#ifdef LITMUS_RT
+  task_mode(BACKGROUND_TASK);
+#endif
   server_info("%lu: samplingThread exiting", tid);
   pthread_exit(NULL);
 }

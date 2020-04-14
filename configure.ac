@@ -12,6 +12,7 @@ AC_PROG_CC
 
 ## Checks for libraries.
 AC_CHECK_LIB([db-6.2],[db_env_create], [], [AC_MSG_ERROR(db-6.2 was not found)])
+AC_CHECK_LIB([litmus],[init_litmus], [], [AC_MSG_ERROR(litmus was not found)])
 AC_CHECK_LIB([rt], [clock_gettime], [], [AC_MSG_ERROR(rt was not found)])
 AC_CHECK_LIB([stocktrading], [benchmark_handle_alloc], [], [AC_MSG_ERROR(stocktrading was not found)])
 AC_CHECK_LIB([chronosx], [chronosEnvAlloc], [], [AC_MSG_ERROR(chronosx was not found)])
@@ -27,6 +28,7 @@ AC_CHECK_HEADERS([chronos_environment.h], [], [AC_MSG_ERROR(chronos_environment.
 AC_CHECK_HEADERS([chronos_packets.h], [], [AC_MSG_ERROR(chronos_packets.h was not found)])
 AC_CHECK_HEADERS([chronos_transactions.h], [], [AC_MSG_ERROR(chronos_transactions.h was not found)])
 AC_CHECK_HEADERS([pthread.h], [], [AC_MSG_ERROR(pthread.h was not found)])
+AC_CHECK_HEADERS([litmus.h], [], [AC_MSG_ERROR(litmus.h was not found)])
 
 ## Checks for typedefs, structures, and compiler characteristics.
 #AC_TYPE_SIZE_T
