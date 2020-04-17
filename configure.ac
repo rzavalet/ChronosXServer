@@ -3,7 +3,7 @@
 
 ## Prelude
 AC_PREREQ([2.69])
-AC_INIT([libchronosx], [0.1], [rj.zavaleta@gmail.com])
+AC_INIT([chronosxserver], [0.1], [rj.zavaleta@gmail.com])
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE([foreign -Wall -Werror])
 

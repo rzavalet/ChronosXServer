@@ -77,11 +77,11 @@ static const char *program_name = "startup_server";
 #if 1
 int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 int server_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
-int chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
+extern int chronos_debug_level;
 #else
 int benchmark_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
 int server_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
-int chronos_debug_level = CHRONOS_DEBUG_LEVEL_MAX;
+extern int chronos_debug_level;
 #endif
 
 const char *chronosServerThreadNames[] ={
@@ -329,6 +329,8 @@ int main(int argc, char *argv[])
 
   char           **pkeys_list = NULL;
   int              num_pkeys = 0;
+
+  chronos_debug_level = CHRONOS_DEBUG_LEVEL_MIN;
 
 
   rc = init_stats_struct();
@@ -1725,7 +1727,7 @@ processThread(void *argP)
 #ifdef CHRONOS_UPDATE_TRANSACTIONS_ENABLED
     int num_txn_to_dequeue = chronos_queue_size(infoP->contextP->sysTxnQueue);
 
-    if (num_txn_to_dequeue > 0) {
+    while (num_txn_to_dequeue -- > 0) {
       /*-------- Process refresh transaction ----------*/
       current_rep ++;
 
@@ -2058,9 +2060,13 @@ nothingToDo:
       milliSleep(50, timeout);
     }
     else {
+#if 0
       if (waitPeriod(update_period) != CHRONOS_SERVER_SUCCESS) {
         goto cleanup;
       }
+#endif
+      server_info("Sleeping %lf", update_period);
+      milliSleep(update_period, timeout);
     }
 #endif
 
