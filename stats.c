@@ -40,6 +40,9 @@ typedef struct chronosServerStats_t
   int            sample_num;
   long long      deadline;
 
+  long long      user_xacts_count_in_period[CHRONOS_SAMPLING_SLOTS];
+  long long      user_xacts_duration_in_period[CHRONOS_SAMPLING_SLOTS];
+
   long long      user_xacts_history[CHRONOS_SAMPLING_SLOTS];
   long long      user_xacts_timely[CHRONOS_SAMPLING_SLOTS];
   long long      user_xacts_duration[CHRONOS_SAMPLING_SLOTS];
@@ -127,6 +130,39 @@ update_thread_stats(const struct timeval        *start,
 
 }
 
+long long
+period_user_xacts_count_get(int                          num_threads,
+                            chronosServerThreadStats_t  *threadStatsArr)
+{
+  int i, j;
+  long long total_user_xacts = 0;
+
+  for (j=0; j<num_threads; j++) {
+    for (i=0; i<CHRONOS_TXN_TYPES-1; i++) {
+      total_user_xacts += threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_SUCCESS]
+                      + threadStatsArr[j].xacts_executed[i][CHRONOS_XACT_FAILED];
+
+    }
+  }
+
+  return total_user_xacts;
+}
+
+long long
+period_user_xacts_duration_get(int                          num_threads,
+                               chronosServerThreadStats_t  *threadStatsArr)
+{
+  int i, j;
+  long long total_duration_user_xacts = 0;
+
+  for (j=0; j<num_threads; j++) {
+    for (i=0; i<CHRONOS_TXN_TYPES-1; i++) {
+      total_duration_user_xacts += threadStatsArr[j].xacts_duration[i];
+    }
+  }
+
+  return total_duration_user_xacts;
+}
 
 /*------------------------------------------------
  *      API for Server Stats
@@ -165,7 +201,7 @@ long long
 last_user_xacts_duration_get(chronosServerStats_t  *serverStatsP)
 {
   int sample_num = serverStatsP->sample_num;
-  return serverStatsP->user_xacts_duration[sample_num];
+  return serverStatsP->user_xacts_duration_in_period[sample_num];
 }
 
 long long
@@ -186,7 +222,7 @@ long long
 last_user_xacts_history_get(chronosServerStats_t  *serverStatsP)
 {
   int sample_num = serverStatsP->sample_num;
-  return serverStatsP->user_xacts_history[sample_num];
+  return serverStatsP->user_xacts_count_in_period[sample_num];
 }
 
 long long
@@ -276,6 +312,8 @@ aggregate_thread_stats(int                          num_threads,
     total_duration_refresh_xacts += threadStatsArr[j].xacts_duration[CHRONOS_SYS_TXN_UPDATE_STOCK];
   }
 
+  // Reset the thread stats
+  //memset(threadStatsArr, 0, num_threads * sizeof(chronosServerThreadStats_t));
   
   serverStatsP->sample_num = (serverStatsP->sample_num + 1) % CHRONOS_SAMPLING_SLOTS;
   sample_num = serverStatsP->sample_num;
@@ -286,6 +324,9 @@ aggregate_thread_stats(int                          num_threads,
   /* These are the cumulative xacts */
   serverStatsP->user_xacts_history[sample_num] = total_user_xacts;
   serverStatsP->user_xacts_timely[sample_num] = timely_user_xacts;
+
+  serverStatsP->user_xacts_timely[sample_num] = timely_user_xacts;
+
   serverStatsP->user_xacts_duration[sample_num] = total_duration_user_xacts;
   serverStatsP->user_xacts_delay[sample_num] = total_delay_user_xacts;
   serverStatsP->user_xacts_slack[sample_num] = total_slack_user_xacts;
@@ -304,6 +345,11 @@ aggregate_thread_stats(int                          num_threads,
    */
   serverStatsP->user_xacts_tpm[sample_num] = total_user_xacts - old_count;
   serverStatsP->user_xacts_ttpm[sample_num] = timely_user_xacts - old_timely;
+
+  serverStatsP->user_xacts_count_in_period[sample_num] = serverStatsP->user_xacts_history[sample_num] 
+                                                         - serverStatsP->user_xacts_history[(sample_num + CHRONOS_SAMPLING_SLOTS - 1) % CHRONOS_SAMPLING_SLOTS];
+  serverStatsP->user_xacts_duration_in_period[sample_num] = serverStatsP->user_xacts_duration[sample_num] 
+                                                         - serverStatsP->user_xacts_duration[(sample_num + CHRONOS_SAMPLING_SLOTS - 1) % CHRONOS_SAMPLING_SLOTS];
 
   return;
 }

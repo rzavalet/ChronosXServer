@@ -9,7 +9,9 @@
 #define SERVER_CONFIG_H_
 
 /* These are the enabled components */
+#if 1
 #define CHRONOS_UPDATE_TRANSACTIONS_ENABLED
+#endif
 #define CHRONOS_USER_TRANSACTIONS_ENABLED
 
 /* These are the directories where the databases and the datafiles live.
@@ -26,17 +28,13 @@
 #define CHRONOS_DEBUG_LEVEL_MIN         (0)
 #define CHRONOS_DEBUG_LEVEL_MAX         (10)
 
-#define CHRONOS_SAMPLING_SPACE         (5)
-
+#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60)
+#define CHRONOS_SEC_TO_MS(_s)           ((_s) * 1000)
 
 /* In the Chronos paper, the number of server threads
  * is 350 for their linux settings
  */
-#ifdef CHRONOS_DEBUG
 #define CHRONOS_NUM_SERVER_THREADS    1
-#else
-#define CHRONOS_NUM_SERVER_THREADS    1
-#endif
 #define CHRONOS_MAX_NUM_SERVER_THREADS  CHRONOS_NUM_SERVER_THREADS
 
 
@@ -67,27 +65,18 @@
 
 /* Chronos experiments take 15 minutes
  */
-#define CHRONOS_MIN_TO_S(_m)            ((_m) * 60)
-#ifdef CHRONOS_DEBUG
-#define CHRONOS_EXPERIMENT_DURATION_SEC (CHRONOS_MIN_TO_S(1))
-#else
 #define CHRONOS_EXPERIMENT_DURATION_SEC (CHRONOS_MIN_TO_S(15))
-#endif
 #define CHRONOS_WARMUP_DURATION_SEC     (CHRONOS_MIN_TO_S(1))
 
-#define CHRONOS_ALPHA                  (0.4)
+#define CHRONOS_ALPHA                  (0.6)
 #define CHRONOS_BETA                   (2.0)
 
 /* In the Chronos paper, the number of client threads start
  * at 900 and it can increase up to 1800
  */
-#ifdef CHRONOS_DEBUG
 #define CHRONOS_NUM_CLIENT_THREADS    10
-#else
-#define CHRONOS_NUM_CLIENT_THREADS    900
-#endif
 
-#define CHRONOS_TCP_QUEUE   1024
+#define CHRONOS_TCP_QUEUE   2048
 
 /*--------------------------------------------------------------
  * Litmus RT constants:

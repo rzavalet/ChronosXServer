@@ -4,6 +4,9 @@
 #define CHRONOS_SERVER_SUCCESS  (0)
 #define CHRONOS_SERVER_FAIL     (1)
 
+#define milliSleep(t,x) \
+        ((x).tv_sec=0, (x).tv_usec=(t)*1000, select(0,NULL,NULL,NULL,&(x)))
+
 #define server_msg(_prefix, ...) \
   do {                     \
     char _local_buf_[256];             \

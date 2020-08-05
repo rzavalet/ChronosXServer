@@ -8,6 +8,9 @@
  *-----------------------------------------------*/
 #define getTime(x) gettimeofday( (x), NULL)
 
+#define milliSleep(t,x) \
+        ((x).tv_sec=0, (x).tv_usec=(t)*1000, select(0,NULL,NULL,NULL,&(x)))
+
 long int 
 diff_time(const struct timeval *start,
           const struct timeval *end);
@@ -29,6 +32,14 @@ chronosServerThreadStatsAlloc(int num_threads);
 
 void
 chronosServerThreadStatsFree(chronosServerThreadStats_t *threadStatsArr);
+
+long long
+period_user_xacts_duration_get(int                          num_threads,
+                               chronosServerThreadStats_t  *threadStatsArr);
+
+long long
+period_user_xacts_count_get(int                          num_threads,
+                            chronosServerThreadStats_t  *threadStatsArr);
 
 void
 update_thread_stats(const struct timeval        *start,

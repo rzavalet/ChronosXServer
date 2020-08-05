@@ -98,7 +98,9 @@ typedef struct chronosServerContext_t
   double                average_service_delay_ms;
   double                degree_timing_violation;
   double                smoth_degree_timing_violation;
+  double                period_smoth_degree_timing_violation;
   double                alpha;
+  long long             inter_xact_sleep_ms;
 
   chronos_ac_env_t     *ac_env; 
   chronos_aup_env_h    *aup_env;
